@@ -32,6 +32,20 @@ if (dropZone) {
 }
 
 async function handleUpload(file) {
+  const maxMB = parseInt(dropZone.dataset.maxMb);
+  if (file.size > maxMB * 1024 * 1024) {
+    $("idle-state").classList.add("hidden");
+    $("result-state").classList.remove("hidden");
+    $("result-state").innerHTML = `
+      <div class="result-container">
+        <div class="error-text">File too large (Max ${maxMB}MB)</div>
+        <div class="reset-wrapper">
+          <button class="reset-btn" onclick="resetUI()">Try again</button>
+        </div>
+      </div>`;
+    return;
+  }
+
   $("idle-state").classList.add("hidden");
   $("busy-state").classList.remove("hidden");
   $("p-bar-container").classList.add("visible");

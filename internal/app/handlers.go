@@ -21,9 +21,9 @@ func (app *App) HandleHome(w http.ResponseWriter, r *http.Request) {
 		"MaxMB": app.Conf.MaxMB,
 		"Host":  r.Host,
 	})
-    if err != nil {
-        app.Logger.Error("Template error", "err", err)
-    }
+	if err != nil {
+		app.Logger.Error("Template error", "err", err)
+	}
 }
 
 func (app *App) HandleUpload(w http.ResponseWriter, r *http.Request) {
@@ -32,17 +32,27 @@ func (app *App) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		if err.Error() == "http: request body too large" {
+			app.SendError(w, r, http.StatusRequestEntityTooLarge)
+			return
+		}
 		app.SendError(w, r, http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
 	tmpPath := filepath.Join(app.Conf.StorageDir, "tmp", fmt.Sprintf("up_%d", os.Getpid()))
-	tmp, _ := os.Create(tmpPath)
+	tmp, err := os.Create(tmpPath)
+	if err != nil {
+		app.Logger.Error("Failed to create temp file", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
 	defer os.Remove(tmpPath)
 	defer tmp.Close()
 
 	if _, err := io.Copy(tmp, file); err != nil {
+		app.Logger.Error("Failed to write temp file", "err", err)
 		app.SendError(w, r, http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -51,53 +61,124 @@ func (app *App) HandleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) HandleChunk(w http.ResponseWriter, r *http.Request) {
-	uid := r.FormValue("upload_id")
-	idx, _ := strconv.Atoi(r.FormValue("index"))
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 
-	if !reUploadID.MatchString(uid) || idx > 1000 {
+	uid := r.FormValue("upload_id")
+	idx, err := strconv.Atoi(r.FormValue("index"))
+	if err != nil {
+		app.SendError(w, r, http.StatusBadRequest)
+		return
+	}
+
+	const chunkSize = 8 << 20
+	maxChunks := int((app.Conf.MaxMB<<20)/chunkSize) + 2
+
+	if !reUploadID.MatchString(uid) || idx > maxChunks || idx < 0 {
 		app.SendError(w, r, http.StatusBadRequest)
 		return
 	}
 
 	file, _, err := r.FormFile("chunk")
 	if err != nil {
+		if err.Error() == "http: request body too large" {
+			app.SendError(w, r, http.StatusRequestEntityTooLarge)
+			return
+		}
+		app.SendError(w, r, http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
 	dir := filepath.Join(app.Conf.StorageDir, "tmp", uid)
-	os.MkdirAll(dir, 0700)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		app.Logger.Error("Failed to create chunk dir", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
 
-	dest, _ := os.Create(filepath.Join(dir, strconv.Itoa(idx)))
+	dest, err := os.Create(filepath.Join(dir, strconv.Itoa(idx)))
+	if err != nil {
+		app.Logger.Error("Failed to create chunk file", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
 	defer dest.Close()
-	io.Copy(dest, file)
+
+	if _, err := io.Copy(dest, file); err != nil {
+		app.Logger.Error("Failed to save chunk", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
 }
 
 func (app *App) HandleFinish(w http.ResponseWriter, r *http.Request) {
 	uid := r.FormValue("upload_id")
-	total, _ := strconv.Atoi(r.FormValue("total"))
+	total, err := strconv.Atoi(r.FormValue("total"))
+	if err != nil {
+		app.SendError(w, r, http.StatusBadRequest)
+		return
+	}
 
-	if !reUploadID.MatchString(uid) || total > 1000 {
+	const chunkSize = 8 << 20
+	maxChunks := int((app.Conf.MaxMB<<20)/chunkSize) + 2
+
+	if !reUploadID.MatchString(uid) || total > maxChunks || total <= 0 {
 		app.SendError(w, r, http.StatusBadRequest)
 		return
 	}
 
 	tmpPath := filepath.Join(app.Conf.StorageDir, "tmp", "m_"+uid)
-	merged, _ := os.Create(tmpPath)
+	merged, err := os.Create(tmpPath)
+	if err != nil {
+		app.Logger.Error("Failed to create merge file", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
 	defer os.Remove(tmpPath)
 	defer merged.Close()
+
+	limit := app.Conf.MaxMB << 20
+	var written int64
 
 	for i := range total {
 		partPath := filepath.Join(app.Conf.StorageDir, "tmp", uid, strconv.Itoa(i))
 		part, err := os.Open(partPath)
 		if err != nil {
-			continue
+			app.Logger.Error("Missing chunk during merge", "uid", uid, "index", i, "err", err)
+			app.SendError(w, r, http.StatusBadRequest)
+			return
 		}
-		io.Copy(merged, part)
+
+		n, err := io.Copy(merged, part)
 		part.Close()
+		if err != nil {
+			app.Logger.Error("Failed to append chunk", "err", err)
+			app.SendError(w, r, http.StatusInternalServerError)
+			return
+		}
+
+		written += n
+		if written > limit {
+			app.SendError(w, r, http.StatusRequestEntityTooLarge)
+			return
+		}
 	}
 
-	app.FinalizeFile(w, r, merged, r.FormValue("filename"))
+	if err := merged.Close(); err != nil {
+		app.Logger.Error("Failed to close merged file", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
+
+	mergedRead, err := os.Open(tmpPath)
+	if err != nil {
+		app.Logger.Error("Failed to open merged file", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
+	defer mergedRead.Close()
+
+	app.FinalizeFile(w, r, mergedRead, r.FormValue("filename"))
 	os.RemoveAll(filepath.Join(app.Conf.StorageDir, "tmp", uid))
 }
 
@@ -126,10 +207,21 @@ func (app *App) HandleGetFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, _ := os.Open(path)
+	f, err := os.Open(path)
+	if err != nil {
+		app.Logger.Error("Failed to open file", "path", path, "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
 	defer f.Close()
 
-	streamer, _ := crypto.NewGCMStreamer(key)
+	streamer, err := crypto.NewGCMStreamer(key)
+	if err != nil {
+		app.Logger.Error("Failed to create crypto streamer", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
+
 	decryptor := crypto.NewDecryptor(f, streamer.AEAD, info.Size())
 
 	contentType := mime.TypeByExtension(ext)
@@ -146,13 +238,28 @@ func (app *App) HandleGetFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) FinalizeFile(w http.ResponseWriter, r *http.Request, src *os.File, filename string) {
-	src.Seek(0, 0)
-	key, _ := crypto.DeriveKey(src)
+	if _, err := src.Seek(0, 0); err != nil {
+		app.Logger.Error("Seek failed", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
+
+	key, err := crypto.DeriveKey(src)
+	if err != nil {
+		app.Logger.Error("Key derivation failed", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
 
 	ext := filepath.Ext(filename)
 	id := crypto.GetID(key, ext)
 
-	src.Seek(0, 0)
+	if _, err := src.Seek(0, 0); err != nil {
+		app.Logger.Error("Seek failed", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
+
 	finalPath := filepath.Join(app.Conf.StorageDir, id)
 
 	if _, err := os.Stat(finalPath); err == nil {
@@ -160,15 +267,41 @@ func (app *App) FinalizeFile(w http.ResponseWriter, r *http.Request, src *os.Fil
 		return
 	}
 
-	out, _ := os.Create(finalPath + ".tmp")
-	streamer, _ := crypto.NewGCMStreamer(key)
-	if err := streamer.EncryptStream(out, src); err != nil {
-		out.Close()
-		os.Remove(finalPath + ".tmp")
+	out, err := os.Create(finalPath + ".tmp")
+	if err != nil {
+		app.Logger.Error("Failed to create final file", "err", err)
 		app.SendError(w, r, http.StatusInternalServerError)
 		return
 	}
-	out.Close()
-	os.Rename(finalPath+".tmp", finalPath)
+	defer func() {
+		out.Close()
+		os.Remove(finalPath + ".tmp")
+	}()
+
+	streamer, err := crypto.NewGCMStreamer(key)
+	if err != nil {
+		app.Logger.Error("Failed to create streamer", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
+
+	if err := streamer.EncryptStream(out, src); err != nil {
+		app.Logger.Error("Encryption failed", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
+
+	if err := out.Close(); err != nil {
+		app.Logger.Error("Failed to close final file", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
+
+	if err := os.Rename(finalPath+".tmp", finalPath); err != nil {
+		app.Logger.Error("Failed to rename final file", "err", err)
+		app.SendError(w, r, http.StatusInternalServerError)
+		return
+	}
+
 	app.RespondWithLink(w, r, key, filename)
 }
