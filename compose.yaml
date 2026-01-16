@@ -1,6 +1,6 @@
 services:
   safebin:
-    image: ghcr.io/skidoodle/safebin:main
+    image: ghcr.io/skidoodle/safebin:latest
     container_name: safebin
     restart: unless-stopped
     ports:
