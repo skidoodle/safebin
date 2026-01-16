@@ -1,0 +1,18 @@
+{{define "content"}}
+<main class="upload-area" id="drop-zone">
+    <div id="idle-state">
+        <div style="font-size: 32px; color: var(--accent)">↑</div>
+        <div style="font-weight: 500; color: var(--header-white)">Click or drag to upload</div>
+        <div class="dim">Max size: {{.MaxMB}}MB</div>
+    </div>
+
+    <div id="busy-state" style="display: none">
+        <div id="status-msg" style="font-weight: 500">Uploading...</div>
+        <div class="progress-bar" id="p-bar-container" style="display: block">
+            <div class="progress-fill" id="p-fill"></div>
+        </div>
+    </div>
+
+    <div id="result-state"></div>
+</main>
+{{end}}

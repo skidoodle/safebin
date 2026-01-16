@@ -1,0 +1,31 @@
+{{define "base"}}
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>safebin</title>
+        <link rel="stylesheet" href="/static/css/style.css" />
+    </head>
+    <body>
+        <div class="container">
+            <header class="header">
+                <h2 style="margin: 0; color: var(--header-white)">safebin</h2>
+                <div class="dim">Encrypted Temporary File Storage</div>
+            </header>
+
+            {{template "content" .}}
+
+            <section style="margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border)">
+                <div class="dim" style="text-transform: uppercase; font-size: 11px; font-weight: 700; letter-spacing: 1px">CLI Usage</div>
+                <pre style="background: #161b22; padding: 16px; border-radius: 8px; font-size: 13px; overflow-x: auto; border: 1px solid var(--border)">
+curl -F file=@yourfile {{.Host}}</pre
+                >
+            </section>
+        </div>
+
+        <input type="file" id="file-input" style="display: none" />
+        <script src="/static/js/app.js"></script>
+    </body>
+</html>
+{{end}}

@@ -1,0 +1,8 @@
+services:
+  safebin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: safebin-dev
+    ports:
+      - 8080:8080

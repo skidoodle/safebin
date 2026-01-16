@@ -1,0 +1,19 @@
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 10001 -s /bin/bash appuser
+WORKDIR /app
+
+COPY safebin .
+COPY web ./web
+
+RUN mkdir -p /app/storage && chown 10001:10001 /app/storage
+VOLUME ["/app/storage"]
+
+USER 10001
+EXPOSE 8080
+
+ENTRYPOINT ["/app/safebin"]
