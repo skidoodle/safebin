@@ -4,7 +4,7 @@ const fileInput = $("file-input");
 
 if (dropZone) {
   dropZone.onclick = () => {
-    if ($("idle-state").style.display !== "none") fileInput.click();
+    if (!$("idle-state").classList.contains("hidden")) fileInput.click();
   };
 
   fileInput.onchange = () => {
@@ -32,8 +32,9 @@ if (dropZone) {
 }
 
 async function handleUpload(file) {
-  $("idle-state").style.display = "none";
-  $("busy-state").style.display = "block";
+  $("idle-state").classList.add("hidden");
+  $("busy-state").classList.remove("hidden");
+  $("p-bar-container").classList.add("visible");
 
   const uploadID = Math.random().toString(36).substring(2, 15);
   const chunkSize = 1024 * 1024 * 8;
@@ -61,11 +62,19 @@ async function handleUpload(file) {
       headers: { "X-Requested-With": "XMLHttpRequest" },
     });
 
-    $("busy-state").style.display = "none";
+    $("busy-state").classList.add("hidden");
+    $("result-state").classList.remove("hidden");
     $("result-state").innerHTML = await res.text();
   } catch (e) {
-    $("busy-state").style.display = "none";
-    $("result-state").innerHTML = `<div class="error-text">Upload Failed</div><button class="reset-btn" onclick="resetUI()">Try again</button>`;
+    $("busy-state").classList.add("hidden");
+    $("result-state").classList.remove("hidden");
+    $("result-state").innerHTML = `
+      <div class="result-container">
+        <div class="error-text">Upload Failed</div>
+        <div class="reset-wrapper">
+          <button class="reset-btn" onclick="resetUI()">Try again</button>
+        </div>
+      </div>`;
   }
 }
 

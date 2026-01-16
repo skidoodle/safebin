@@ -20,7 +20,7 @@ body {
 
 .container {
     width: 100%;
-    max-width: 600px;
+    max-width: 800px;
     padding: 20px;
 }
 
@@ -28,22 +28,50 @@ body {
     margin-bottom: 30px;
     border-left: 3px solid var(--accent);
     padding-left: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.header-title {
+    margin: 0;
+    color: var(--header-white);
 }
 
 .upload-area {
     border: 2px dashed var(--border);
     border-radius: 12px;
-    padding: 60px 20px;
+    padding: 20px;
     text-align: center;
     cursor: pointer;
     background: #161b22;
-    transition: 0.2s;
+    transition:
+        border-color 0.2s,
+        background 0.2s;
+    height: 220px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 .upload-area:hover,
 .upload-area.dragover {
     border-color: var(--accent);
     background: #1c2128;
+}
+
+.upload-icon {
+    font-size: 32px;
+    color: var(--accent);
+    margin-bottom: 8px;
+}
+
+.upload-text {
+    font-weight: 500;
+    color: var(--header-white);
 }
 
 .progress-bar {
@@ -53,6 +81,11 @@ body {
     margin: 25px 0;
     overflow: hidden;
     display: none;
+    width: 95%;
+}
+
+.progress-bar.visible {
+    display: block;
 }
 
 .progress-fill {
@@ -62,10 +95,37 @@ body {
     transition: width 0.3s;
 }
 
+#busy-state {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#result-state {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+.result-container {
+    width: 100%;
+    max-width: 700px;
+    display: flex;
+    flex-direction: column;
+    padding: 0 20px;
+    box-sizing: border-box;
+}
+
+.result-label {
+    text-align: left;
+    margin-bottom: 8px;
+}
+
 .copy-box {
     display: flex;
-    margin-top: 20px;
     gap: 8px;
+    width: 100%;
 }
 
 input[type="text"] {
@@ -76,7 +136,10 @@ input[type="text"] {
     padding: 12px;
     border-radius: 6px;
     font-family: monospace;
+    font-size: 14px;
     outline: none;
+    min-width: 0;
+    width: 100%;
 }
 
 button {
@@ -87,16 +150,27 @@ button {
     border-radius: 6px;
     cursor: pointer;
     font-weight: 600;
+    white-space: nowrap;
+}
+
+.reset-wrapper {
+    margin-top: 20px;
+    display: flex;
+    justify-content: center;
 }
 
 .reset-btn {
     background: transparent;
     color: var(--fg);
     text-decoration: underline;
-    margin-top: 20px;
     border: none;
     cursor: pointer;
     opacity: 0.7;
+    font-size: 14px;
+}
+
+.reset-btn:hover {
+    opacity: 1;
 }
 
 .dim {
@@ -107,4 +181,67 @@ button {
 .error-text {
     color: #f85149;
     margin-bottom: 10px;
+}
+
+.github-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #21262d;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--header-white);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: 0.2s;
+}
+
+.github-btn:hover {
+    background: #30363d;
+    border-color: #8b949e;
+}
+
+.github-btn svg {
+    opacity: 0.9;
+}
+
+.cli-section {
+    margin-top: 40px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+}
+
+.cli-label {
+    text-transform: uppercase;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.cli-pre {
+    background: #161b22;
+    padding: 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+}
+
+.status-text {
+    font-weight: 500;
+}
+
+.hidden {
+    display: none !important;
+}
+
+@media (max-width: 400px) {
+    .github-btn span {
+        display: none;
+    }
+    .github-btn {
+        padding: 6px;
+    }
 }
