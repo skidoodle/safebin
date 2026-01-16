@@ -21,6 +21,7 @@ LABEL org.opencontainers.image.licenses="GPL-2.0-only"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    media-types \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 10001 -s /bin/bash appuser
