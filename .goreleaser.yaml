@@ -28,7 +28,6 @@ archives:
     files:
       - web/**/*
       - README.md
-      - CHANGELOG.md
 
 dockers:
   - image_templates:
