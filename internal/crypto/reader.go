@@ -4,34 +4,41 @@ import (
 	"crypto/cipher"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 )
 
+var ErrInvalidWhence = errors.New("invalid whence")
+var ErrNegativeBias = errors.New("negative bias")
+
 type Decryptor struct {
-	rs     io.ReadSeeker
-	aead   cipher.AEAD
-	size   int64
-	offset int64
+	readSeeker io.ReadSeeker
+	aead       cipher.AEAD
+	size       int64
+	offset     int64
 }
 
-func NewDecryptor(rs io.ReadSeeker, aead cipher.AEAD, encryptedSize int64) *Decryptor {
+func NewDecryptor(readSeeker io.ReadSeeker, aead cipher.AEAD, encryptedSize int64) *Decryptor {
 	overhead := int64(aead.Overhead())
-	fullBlocks := encryptedSize / (GCMChunkSize + overhead)
-	remainder := encryptedSize % (GCMChunkSize + overhead)
+	chunkWithOverhead := int64(GCMChunkSize) + overhead
 
-	plainSize := (fullBlocks * GCMChunkSize)
+	fullBlocks := encryptedSize / chunkWithOverhead
+	remainder := encryptedSize % chunkWithOverhead
+
+	plainSize := fullBlocks * GCMChunkSize
 	if remainder > overhead {
 		plainSize += (remainder - overhead)
 	}
 
 	return &Decryptor{
-		rs:   rs,
-		aead: aead,
-		size: plainSize,
+		readSeeker: readSeeker,
+		aead:       aead,
+		size:       plainSize,
+		offset:     0,
 	}
 }
 
-func (d *Decryptor) Read(p []byte) (int, error) {
+func (d *Decryptor) Read(buf []byte) (int, error) {
 	if d.offset >= d.size {
 		return 0, io.EOF
 	}
@@ -40,25 +47,29 @@ func (d *Decryptor) Read(p []byte) (int, error) {
 	overhang := d.offset % GCMChunkSize
 
 	overhead := int64(d.aead.Overhead())
-	actualChunkSize := int64(GCMChunkSize + overhead)
+	actualChunkSize := int64(GCMChunkSize) + overhead
 
-	_, err := d.rs.Seek(chunkIdx*actualChunkSize, io.SeekStart)
+	_, err := d.readSeeker.Seek(chunkIdx*actualChunkSize, io.SeekStart)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to seek: %w", err)
 	}
 
 	encrypted := make([]byte, actualChunkSize)
-	n, err := io.ReadFull(d.rs, encrypted)
-	if err != nil && err != io.ErrUnexpectedEOF {
-		return 0, err
+
+	bytesRead, err := io.ReadFull(d.readSeeker, encrypted)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, fmt.Errorf("failed to read encrypted data: %w", err)
 	}
 
 	nonce := make([]byte, NonceSize)
+	if chunkIdx < 0 {
+		return 0, fmt.Errorf("invalid chunk index")
+	}
 	binary.BigEndian.PutUint64(nonce[4:], uint64(chunkIdx))
 
-	plaintext, err := d.aead.Open(nil, nonce, encrypted[:n], nil)
+	plaintext, err := d.aead.Open(nil, nonce, encrypted[:bytesRead], nil)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to decrypt: %w", err)
 	}
 
 	if overhang >= int64(len(plaintext)) {
@@ -66,7 +77,7 @@ func (d *Decryptor) Read(p []byte) (int, error) {
 	}
 
 	available := plaintext[overhang:]
-	nCopied := copy(p, available)
+	nCopied := copy(buf, available)
 	d.offset += int64(nCopied)
 
 	return nCopied, nil
@@ -74,6 +85,7 @@ func (d *Decryptor) Read(p []byte) (int, error) {
 
 func (d *Decryptor) Seek(offset int64, whence int) (int64, error) {
 	var abs int64
+
 	switch whence {
 	case io.SeekStart:
 		abs = offset
@@ -82,11 +94,14 @@ func (d *Decryptor) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekEnd:
 		abs = d.size + offset
 	default:
-		return 0, errors.New("invalid whence")
+		return 0, ErrInvalidWhence
 	}
+
 	if abs < 0 {
-		return 0, errors.New("negative bias")
+		return 0, ErrNegativeBias
 	}
+
 	d.offset = abs
+
 	return abs, nil
 }

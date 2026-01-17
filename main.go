@@ -2,27 +2,39 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/skidoodle/safebin/internal/app"
 )
 
+const (
+	permUserRWX     = 0o700
+	serverTimeout   = 10 * time.Minute
+	shutdownTimeout = 10 * time.Second
+)
+
 func main() {
 	cfg := app.LoadConfig()
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level:     slog.LevelDebug,
+		AddSource: true,
+	}))
 
 	logger.Info("Initializing Safebin Server",
 		"storage_dir", cfg.StorageDir,
 		"max_file_size", fmt.Sprintf("%dMB", cfg.MaxMB),
 	)
 
-	if err := os.MkdirAll(fmt.Sprintf("%s/tmp", cfg.StorageDir), 0700); err != nil {
+	tmpDir := filepath.Join(cfg.StorageDir, "tmp")
+	if err := os.MkdirAll(tmpDir, permUserRWX); err != nil {
 		logger.Error("Failed to initialize storage directory", "err", err)
 		os.Exit(1)
 	}
@@ -41,13 +53,15 @@ func main() {
 	srv := &http.Server{
 		Addr:         cfg.Addr,
 		Handler:      application.Routes(),
-		ReadTimeout:  10 * time.Minute,
-		WriteTimeout: 10 * time.Minute,
+		ReadTimeout:  serverTimeout,
+		WriteTimeout: serverTimeout,
+		IdleTimeout:  serverTimeout,
 	}
 
 	go func() {
 		application.Logger.Info("Server is ready and listening", "addr", cfg.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			application.Logger.Error("Server failed to start", "err", err)
 			os.Exit(1)
 		}
@@ -56,10 +70,12 @@ func main() {
 	<-ctx.Done()
 	application.Logger.Info("Shutting down gracefully...")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		application.Logger.Error("Forced shutdown", "err", err)
 	}
+
 	application.Logger.Info("Server stopped")
 }

@@ -21,36 +21,54 @@ type App struct {
 	Logger *slog.Logger
 }
 
-func LoadConfig() Config {
-	h := getEnv("SAFEBIN_HOST", "0.0.0.0")
-	p := getEnvInt("SAFEBIN_PORT", 8080)
-	s := getEnv("SAFEBIN_STORAGE", "./storage")
-	mDefault := int64(getEnvInt("SAFEBIN_MAX_MB", 512))
+const (
+	defaultHost = "0.0.0.0"
+	defaultPort  = 8080
+	defaultStorage = "./storage"
+	defaultMaxMB = 512
+)
 
-	var m int64
-	flag.StringVar(&h, "h", h, "Bind address")
-	flag.IntVar(&p, "p", p, "Port")
-	flag.StringVar(&s, "s", s, "Storage directory")
-	flag.Int64Var(&m, "m", mDefault, "Max file size in MB")
+func LoadConfig() Config {
+	hostEnv := getEnv("SAFEBIN_HOST", defaultHost)
+	portEnv := getEnvInt("SAFEBIN_PORT", defaultPort)
+	storageEnv := getEnv("SAFEBIN_STORAGE", defaultStorage)
+	maxMBEnv := int64(getEnvInt("SAFEBIN_MAX_MB", defaultMaxMB))
+
+	var host string
+	var port int
+	var storage string
+	var maxMB int64
+
+	flag.StringVar(&host, "h", hostEnv, "Bind address")
+	flag.IntVar(&port, "p", portEnv, "Port")
+	flag.StringVar(&storage, "s", storageEnv, "Storage directory")
+	flag.Int64Var(&maxMB, "m", maxMBEnv, "Max file size in MB")
 	flag.Parse()
 
-	return Config{Addr: fmt.Sprintf("%s:%d", h, p), StorageDir: s, MaxMB: m}
-}
-
-func getEnv(k, f string) string {
-	if v, ok := os.LookupEnv(k); ok {
-		return v
+	return Config{
+		Addr:       fmt.Sprintf("%s:%d", host, port),
+		StorageDir: storage,
+		MaxMB:      maxMB,
 	}
-	return f
 }
 
-func getEnvInt(k string, f int) int {
-	if v, ok := os.LookupEnv(k); ok {
-		if i, err := strconv.Atoi(v); err == nil {
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if value, ok := os.LookupEnv(key); ok {
+		i, err := strconv.Atoi(value)
+		if err == nil {
 			return i
 		}
 	}
-	return f
+
+	return fallback
 }
 
 func ParseTemplates() *template.Template {

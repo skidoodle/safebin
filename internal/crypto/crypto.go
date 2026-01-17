@@ -6,27 +6,34 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 )
 
 const (
 	GCMChunkSize = 64 * 1024
 	NonceSize    = 12
+	KeySize      = 16
+	IDSize       = 9
 )
 
-func DeriveKey(r io.Reader) ([]byte, error) {
-	h := sha256.New()
-	if _, err := io.Copy(h, r); err != nil {
-		return nil, err
+func DeriveKey(reader io.Reader) ([]byte, error) {
+	hasher := sha256.New()
+
+	if _, err := io.Copy(hasher, reader); err != nil {
+		return nil, fmt.Errorf("failed to copy to hasher: %w", err)
 	}
-	return h.Sum(nil)[:16], nil
+
+	return hasher.Sum(nil)[:KeySize], nil
 }
 
 func GetID(key []byte, ext string) string {
-	h := sha256.New()
-	h.Write(key)
-	h.Write([]byte(ext))
-	return base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:9])
+	hasher := sha256.New()
+	hasher.Write(key)
+	hasher.Write([]byte(ext))
+
+	return base64.RawURLEncoding.EncodeToString(hasher.Sum(nil)[:IDSize])
 }
 
 type GCMStreamer struct {
@@ -34,37 +41,46 @@ type GCMStreamer struct {
 }
 
 func NewGCMStreamer(key []byte) (*GCMStreamer, error) {
-	b, err := aes.NewCipher(key)
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
-	g, err := cipher.NewGCM(b)
+
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}
-	return &GCMStreamer{AEAD: g}, nil
+
+	return &GCMStreamer{AEAD: gcm}, nil
 }
 
 func (g *GCMStreamer) EncryptStream(dst io.Writer, src io.Reader) error {
 	buf := make([]byte, GCMChunkSize)
-	var chunkIdx uint64 = 0
+	var chunkIdx uint64
+
 	for {
-		n, err := io.ReadFull(src, buf)
-		if n > 0 {
+		bytesRead, err := io.ReadFull(src, buf)
+		if bytesRead > 0 {
 			nonce := make([]byte, NonceSize)
 			binary.BigEndian.PutUint64(nonce[4:], chunkIdx)
-			ciphertext := g.AEAD.Seal(nil, nonce, buf[:n], nil)
+
+			ciphertext := g.AEAD.Seal(nil, nonce, buf[:bytesRead], nil)
+
 			if _, werr := dst.Write(ciphertext); werr != nil {
-				return werr
+				return fmt.Errorf("failed to write ciphertext: %w", werr)
 			}
+
 			chunkIdx++
 		}
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
+
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			break
 		}
+
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read source: %w", err)
 		}
 	}
+
 	return nil
 }
