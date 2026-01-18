@@ -95,9 +95,16 @@ func TestCleanup_ExpiredStorage(t *testing.T) {
 	}
 
 	if err := app.DB.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(DBBucketName))
+		bFiles := tx.Bucket([]byte(DBBucketName))
+		bIndex := tx.Bucket([]byte(DBBucketIndexName))
+
 		data, _ := json.Marshal(expiredMeta)
-		return b.Put([]byte(filename), data)
+		if err := bFiles.Put([]byte(filename), data); err != nil {
+			return err
+		}
+
+		indexKey := []byte(expiredMeta.ExpiresAt.Format(time.RFC3339) + "_" + filename)
+		return bIndex.Put(indexKey, []byte(filename))
 	}); err != nil {
 		t.Fatalf("DB Update failed: %v", err)
 	}
@@ -109,9 +116,15 @@ func TestCleanup_ExpiredStorage(t *testing.T) {
 	}
 
 	if err := app.DB.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(DBBucketName))
-		if v := b.Get([]byte(filename)); v != nil {
+		bFiles := tx.Bucket([]byte(DBBucketName))
+		if v := bFiles.Get([]byte(filename)); v != nil {
 			t.Error("Cleanup failed to remove metadata")
+		}
+
+		bIndex := tx.Bucket([]byte(DBBucketIndexName))
+		indexKey := []byte(expiredMeta.ExpiresAt.Format(time.RFC3339) + "_" + filename)
+		if v := bIndex.Get(indexKey); v != nil {
+			t.Error("Cleanup failed to remove index entry")
 		}
 		return nil
 	}); err != nil {

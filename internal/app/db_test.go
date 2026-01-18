@@ -29,9 +29,11 @@ func TestInitDB(t *testing.T) {
 	}
 
 	err = db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(DBBucketName))
-		if b == nil {
+		if b := tx.Bucket([]byte(DBBucketName)); b == nil {
 			t.Errorf("Bucket '%s' was not created", DBBucketName)
+		}
+		if b := tx.Bucket([]byte(DBBucketIndexName)); b == nil {
+			t.Errorf("Bucket '%s' was not created", DBBucketIndexName)
 		}
 		return nil
 	})
@@ -85,6 +87,15 @@ func TestDB_MetadataLifecycle(t *testing.T) {
 		if meta.ExpiresAt.Before(time.Now()) {
 			t.Error("Expiration time is in the past")
 		}
+
+		bIndex := tx.Bucket([]byte(DBBucketIndexName))
+		indexKey := []byte(meta.ExpiresAt.Format(time.RFC3339) + "_" + fileID)
+		if val := bIndex.Get(indexKey); val == nil {
+			t.Error("Index entry not found")
+		} else if string(val) != fileID {
+			t.Errorf("Index value mismatch: want %s, got %s", fileID, string(val))
+		}
+
 		return nil
 	})
 	if err != nil {

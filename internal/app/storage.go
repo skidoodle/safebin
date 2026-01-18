@@ -129,32 +129,42 @@ func (app *App) RegisterFile(id string, size int64) error {
 	}
 
 	return app.DB.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(DBBucketName))
+		bFiles := tx.Bucket([]byte(DBBucketName))
+		bIndex := tx.Bucket([]byte(DBBucketIndexName))
+
 		data, err := json.Marshal(meta)
 		if err != nil {
 			return err
 		}
-		return b.Put([]byte(id), data)
+
+		if err := bFiles.Put([]byte(id), data); err != nil {
+			return err
+		}
+
+		indexKey := []byte(meta.ExpiresAt.Format(time.RFC3339) + "_" + id)
+		return bIndex.Put(indexKey, []byte(id))
 	})
 }
 
 func (app *App) CleanStorage() {
-	now := time.Now()
-	var toDelete []string
+	now := time.Now().Format(time.RFC3339)
+	var toDeleteIDs []string
+	var toDeleteKeys []string
 
 	err := app.DB.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(DBBucketName))
-		c := b.Cursor()
+		bIndex := tx.Bucket([]byte(DBBucketIndexName))
+		if bIndex == nil {
+			return nil
+		}
+		c := bIndex.Cursor()
 
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var meta FileMeta
-			if err := json.Unmarshal(v, &meta); err != nil {
-				continue
+			if string(k) > now {
+				break
 			}
 
-			if now.After(meta.ExpiresAt) {
-				toDelete = append(toDelete, string(k))
-			}
+			toDeleteKeys = append(toDeleteKeys, string(k))
+			toDeleteIDs = append(toDeleteIDs, string(v))
 		}
 		return nil
 	})
@@ -164,20 +174,26 @@ func (app *App) CleanStorage() {
 		return
 	}
 
-	if len(toDelete) == 0 {
+	if len(toDeleteIDs) == 0 {
 		return
 	}
 
 	err = app.DB.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(DBBucketName))
-		for _, id := range toDelete {
+		bFiles := tx.Bucket([]byte(DBBucketName))
+		bIndex := tx.Bucket([]byte(DBBucketIndexName))
+
+		for i, id := range toDeleteIDs {
 			path := filepath.Join(app.Conf.StorageDir, id)
 			if err := os.RemoveAll(path); err != nil {
 				app.Logger.Error("Failed to remove expired file", "path", id, "err", err)
 			}
 
-			if err := b.Delete([]byte(id)); err != nil {
+			if err := bFiles.Delete([]byte(id)); err != nil {
 				app.Logger.Error("Failed to delete metadata", "id", id, "err", err)
+			}
+
+			if err := bIndex.Delete([]byte(toDeleteKeys[i])); err != nil {
+				app.Logger.Error("Failed to delete index", "key", toDeleteKeys[i], "err", err)
 			}
 		}
 		return nil

@@ -35,9 +35,10 @@ const (
 	MinRetention    = 24 * time.Hour
 	MaxRetention    = 365 * 24 * time.Hour
 
-	DBFileName   = "safebin.db"
-	DBBucketName = "files"
-	TempDirName  = "tmp"
+	DBFileName        = "safebin.db"
+	DBBucketName      = "files"
+	DBBucketIndexName = "expiry_index"
+	TempDirName       = "tmp"
 )
 
 type Config struct {

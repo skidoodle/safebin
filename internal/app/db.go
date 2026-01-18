@@ -22,8 +22,13 @@ func InitDB(storageDir string) (*bbolt.DB, error) {
 	}
 
 	err = db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte(DBBucketName))
-		return err
+		if _, err := tx.CreateBucketIfNotExists([]byte(DBBucketName)); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists([]byte(DBBucketIndexName)); err != nil {
+			return err
+		}
+		return nil
 	})
 
 	if err != nil {
