@@ -1,12 +1,16 @@
 package app
 
 import (
+	"bytes"
+	"crypto/rand"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/skidoodle/safebin/internal/crypto"
 	"go.etcd.io/bbolt"
 )
 
@@ -129,5 +133,86 @@ func TestCleanup_ExpiredStorage(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("DB View failed: %v", err)
+	}
+}
+
+func TestSaveChunk_EncryptsData(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := &App{
+		Conf:   Config{StorageDir: tmpDir},
+		Logger: discardLogger(),
+	}
+
+	uid := "test-encrypt-chunk"
+	plaintext := make([]byte, 1024)
+	if _, err := rand.Read(plaintext); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.saveChunk(uid, 0, bytes.NewReader(plaintext)); err != nil {
+		t.Fatalf("saveChunk failed: %v", err)
+	}
+
+	path := filepath.Join(tmpDir, TempDirName, uid, "0")
+	fileData, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+
+	if bytes.Equal(fileData, plaintext) {
+		t.Fatal("Chunk stored as plaintext!")
+	}
+	if bytes.Contains(fileData, plaintext) {
+		t.Fatal("Chunk contains plaintext!")
+	}
+
+	expectedSize := crypto.KeySize + len(plaintext) + 16
+	if len(fileData) != expectedSize {
+		t.Errorf("Unexpected file size. Want %d, got %d", expectedSize, len(fileData))
+	}
+}
+
+func TestGetChunkDecryptors_RestoresData(t *testing.T) {
+	tmpDir := t.TempDir()
+	app := &App{
+		Conf:   Config{StorageDir: tmpDir},
+		Logger: discardLogger(),
+	}
+
+	uid := "test-restore"
+	data1 := []byte("chunk one data")
+	data2 := []byte("chunk two data")
+
+	if err := app.saveChunk(uid, 0, bytes.NewReader(data1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.saveChunk(uid, 1, bytes.NewReader(data2)); err != nil {
+		t.Fatal(err)
+	}
+
+	decryptors, closeFn, err := app.getChunkDecryptors(uid, 2)
+	if err != nil {
+		t.Fatalf("getChunkDecryptors failed: %v", err)
+	}
+	defer closeFn()
+
+	if len(decryptors) != 2 {
+		t.Fatalf("Expected 2 decryptors, got %d", len(decryptors))
+	}
+
+	buf1, err := io.ReadAll(decryptors[0])
+	if err != nil {
+		t.Fatalf("Failed to read decryptor 1: %v", err)
+	}
+	if !bytes.Equal(buf1, data1) {
+		t.Errorf("Chunk 1 mismatch. Want %s, got %s", data1, buf1)
+	}
+
+	buf2, err := io.ReadAll(decryptors[1])
+	if err != nil {
+		t.Fatalf("Failed to read decryptor 2: %v", err)
+	}
+	if !bytes.Equal(buf2, data2) {
+		t.Errorf("Chunk 2 mismatch. Want %s, got %s", data2, buf2)
 	}
 }

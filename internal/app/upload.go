@@ -1,6 +1,8 @@
 package app
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"io"
 	"net/http"
 	"os"
@@ -18,17 +20,14 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 	request.Body = http.MaxBytesReader(writer, request.Body, limit)
 
 	file, header, err := request.FormFile("file")
-
 	if err != nil {
 		if err.Error() == "http: request body too large" {
 			app.SendError(writer, request, http.StatusRequestEntityTooLarge)
 			return
 		}
-
 		app.SendError(writer, request, http.StatusBadRequest)
 		return
 	}
-
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
 			app.Logger.Error("Failed to close upload file", "err", closeErr)
@@ -36,45 +35,60 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 	}()
 
 	tmp, err := os.CreateTemp(filepath.Join(app.Conf.StorageDir, TempDirName), "up_*")
-
 	if err != nil {
 		app.Logger.Error("Failed to create temp file", "err", err)
 		app.SendError(writer, request, http.StatusInternalServerError)
 		return
 	}
-
 	tmpPath := tmp.Name()
 
 	defer func() {
+		_ = tmp.Close()
 		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
 			app.Logger.Error("Failed to remove temp file", "err", removeErr)
 		}
 	}()
 
-	defer func() {
-		if closeErr := tmp.Close(); closeErr != nil {
-			app.Logger.Error("Failed to close temp file", "err", closeErr)
-		}
+	ephemeralKey := make([]byte, crypto.KeySize)
+	if _, err := rand.Read(ephemeralKey); err != nil {
+		app.Logger.Error("Failed to generate ephemeral key", "err", err)
+		app.SendError(writer, request, http.StatusInternalServerError)
+		return
+	}
+
+	pr, pw := io.Pipe()
+	hasher := sha256.New()
+
+	errChan := make(chan error, 1)
+
+	go func() {
+		_, err := io.Copy(io.MultiWriter(hasher, pw), file)
+		_ = pw.CloseWithError(err)
+		errChan <- err
 	}()
 
-	if _, err := io.Copy(tmp, file); err != nil {
-		app.Logger.Error("Failed to write temp file", "err", err)
+	defer pr.Close()
+
+	streamer, err := crypto.NewGCMStreamer(ephemeralKey)
+	if err != nil {
+		app.Logger.Error("Failed to create streamer", "err", err)
+		app.SendError(writer, request, http.StatusInternalServerError)
+		return
+	}
+
+	if err := streamer.EncryptStream(tmp, pr); err != nil {
+		app.Logger.Error("Failed to encrypt stream", "err", err)
+		app.SendError(writer, request, http.StatusInternalServerError)
+		return
+	}
+
+	if err := <-errChan; err != nil {
+		app.Logger.Error("Failed to read/hash upload", "err", err)
 		app.SendError(writer, request, http.StatusRequestEntityTooLarge)
 		return
 	}
 
-	if _, err := tmp.Seek(0, 0); err != nil {
-		app.Logger.Error("Seek failed", "err", err)
-		app.SendError(writer, request, http.StatusInternalServerError)
-		return
-	}
-
-	key, err := crypto.DeriveKey(tmp)
-	if err != nil {
-		app.Logger.Error("Key derivation failed", "err", err)
-		app.SendError(writer, request, http.StatusInternalServerError)
-		return
-	}
+	convergentKey := hasher.Sum(nil)[:crypto.KeySize]
 
 	if _, err := tmp.Seek(0, 0); err != nil {
 		app.Logger.Error("Seek failed", "err", err)
@@ -82,14 +96,16 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	app.finalizeUpload(writer, request, tmp, key, header.Filename)
+	info, _ := tmp.Stat()
+	decryptor := crypto.NewDecryptor(tmp, streamer.AEAD, info.Size())
+
+	app.finalizeUpload(writer, request, decryptor, convergentKey, header.Filename)
 }
 
 func (app *App) HandleChunk(writer http.ResponseWriter, request *http.Request) {
 	request.Body = http.MaxBytesReader(writer, request.Body, MaxRequestOverhead)
 
 	uid := request.FormValue("upload_id")
-
 	idx, err := strconv.Atoi(request.FormValue("index"))
 	if err != nil {
 		app.SendError(writer, request, http.StatusBadRequest)
@@ -104,17 +120,14 @@ func (app *App) HandleChunk(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	file, _, err := request.FormFile("chunk")
-
 	if err != nil {
 		if err.Error() == "http: request body too large" {
 			app.SendError(writer, request, http.StatusRequestEntityTooLarge)
 			return
 		}
-
 		app.SendError(writer, request, http.StatusBadRequest)
 		return
 	}
-
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
 			app.Logger.Error("Failed to close chunk file", "err", closeErr)
@@ -129,7 +142,6 @@ func (app *App) HandleChunk(writer http.ResponseWriter, request *http.Request) {
 
 func (app *App) HandleFinish(writer http.ResponseWriter, request *http.Request) {
 	uid := request.FormValue("upload_id")
-
 	total, err := strconv.Atoi(request.FormValue("total"))
 	if err != nil {
 		app.SendError(writer, request, http.StatusBadRequest)
@@ -143,37 +155,36 @@ func (app *App) HandleFinish(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	files, err := app.openChunkFiles(uid, total)
+	decryptors, closeAll, err := app.getChunkDecryptors(uid, total)
 	if err != nil {
 		app.Logger.Error("Failed to open chunks", "err", err)
 		app.SendError(writer, request, http.StatusInternalServerError)
 		return
 	}
-
 	defer func() {
-		for _, f := range files {
-			_ = f.Close()
-		}
+		closeAll()
 		if err := os.RemoveAll(filepath.Join(app.Conf.StorageDir, TempDirName, uid)); err != nil {
 			app.Logger.Error("Failed to remove chunk dir", "err", err)
 		}
 	}()
 
-	readers := make([]io.Reader, len(files))
-	for i, f := range files {
-		readers[i] = f
+	readers := make([]io.Reader, len(decryptors))
+	for i, d := range decryptors {
+		readers[i] = d
 	}
 
-	key, err := crypto.DeriveKey(io.MultiReader(readers...))
-	if err != nil {
-		app.Logger.Error("Key derivation failed", "err", err)
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, io.MultiReader(readers...)); err != nil {
+		app.Logger.Error("Failed to hash chunks", "err", err)
 		app.SendError(writer, request, http.StatusInternalServerError)
 		return
 	}
 
-	for _, f := range files {
-		if _, err := f.Seek(0, 0); err != nil {
-			app.Logger.Error("Failed to reset chunk", "err", err)
+	convergentKey := hasher.Sum(nil)[:crypto.KeySize]
+
+	for _, d := range decryptors {
+		if _, err := d.Seek(0, io.SeekStart); err != nil {
+			app.Logger.Error("Failed to reset chunk decryptor", "err", err)
 			app.SendError(writer, request, http.StatusInternalServerError)
 			return
 		}
@@ -181,7 +192,7 @@ func (app *App) HandleFinish(writer http.ResponseWriter, request *http.Request) 
 
 	multiSrc := io.MultiReader(readers...)
 
-	app.finalizeUpload(writer, request, multiSrc, key, request.FormValue("filename"))
+	app.finalizeUpload(writer, request, multiSrc, convergentKey, request.FormValue("filename"))
 }
 
 func (app *App) finalizeUpload(writer http.ResponseWriter, request *http.Request, src io.Reader, key []byte, filename string) {

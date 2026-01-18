@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -48,15 +49,30 @@ func (app *App) saveChunk(uid string, idx int, src io.Reader) error {
 		}
 	}()
 
-	if _, err := io.Copy(dest, src); err != nil {
-		return fmt.Errorf("copy chunk: %w", err)
+	key := make([]byte, crypto.KeySize)
+	if _, err := rand.Read(key); err != nil {
+		return fmt.Errorf("generate chunk key: %w", err)
+	}
+
+	if _, err := dest.Write(key); err != nil {
+		return fmt.Errorf("write chunk key: %w", err)
+	}
+
+	streamer, err := crypto.NewGCMStreamer(key)
+	if err != nil {
+		return fmt.Errorf("create streamer: %w", err)
+	}
+
+	if err := streamer.EncryptStream(dest, src); err != nil {
+		return fmt.Errorf("encrypt chunk: %w", err)
 	}
 
 	return nil
 }
 
-func (app *App) openChunkFiles(uid string, total int) ([]*os.File, error) {
+func (app *App) getChunkDecryptors(uid string, total int) ([]io.ReadSeeker, func(), error) {
 	files := make([]*os.File, 0, total)
+	decryptors := make([]io.ReadSeeker, 0, total)
 
 	closeAll := func() {
 		for _, f := range files {
@@ -69,12 +85,41 @@ func (app *App) openChunkFiles(uid string, total int) ([]*os.File, error) {
 		f, err := os.Open(partPath)
 		if err != nil {
 			closeAll()
-			return nil, fmt.Errorf("open chunk %d: %w", i, err)
+			return nil, nil, fmt.Errorf("open chunk %d: %w", i, err)
 		}
 		files = append(files, f)
+
+		key := make([]byte, crypto.KeySize)
+		if _, err := io.ReadFull(f, key); err != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("read chunk key %d: %w", i, err)
+		}
+
+		info, err := f.Stat()
+		if err != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("stat chunk %d: %w", i, err)
+		}
+
+		bodySize := info.Size() - int64(crypto.KeySize)
+		if bodySize < 0 {
+			closeAll()
+			return nil, nil, fmt.Errorf("invalid chunk size %d", i)
+		}
+
+		bodyReader := io.NewSectionReader(f, int64(crypto.KeySize), bodySize)
+
+		streamer, err := crypto.NewGCMStreamer(key)
+		if err != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("create streamer %d: %w", i, err)
+		}
+
+		decryptor := crypto.NewDecryptor(bodyReader, streamer.AEAD, bodySize)
+		decryptors = append(decryptors, decryptor)
 	}
 
-	return files, nil
+	return decryptors, closeAll, nil
 }
 
 func (app *App) encryptAndSave(src io.Reader, key []byte, finalPath string) error {

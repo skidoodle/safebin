@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/skidoodle/safebin/internal/crypto"
 )
 
 func setupTestApp(t *testing.T) (*App, string) {
@@ -173,6 +176,102 @@ func TestIntegration_ChunkedUpload(t *testing.T) {
 
 	if !bytes.Equal(content, dlBytes) {
 		t.Errorf("Chunked reassembly failed. Want %s, got %s", content, dlBytes)
+	}
+}
+
+func TestIntegration_ChunkedUpload_VerifyEncryption(t *testing.T) {
+	app, storageDir := setupTestApp(t)
+	server := httptest.NewServer(app.Routes())
+	defer server.Close()
+
+	uploadID := "securechunk123"
+	plaintext := []byte("This is a secret message that should be encrypted")
+
+	uploadChunk(t, server.URL, uploadID, 0, plaintext)
+
+	chunkPath := filepath.Join(storageDir, TempDirName, uploadID, "0")
+	encryptedData, err := os.ReadFile(chunkPath)
+	if err != nil {
+		t.Fatalf("Failed to read chunk file: %v", err)
+	}
+
+	if bytes.Contains(encryptedData, plaintext) {
+		t.Fatal("Chunk file contains plaintext data!")
+	}
+
+	if len(encryptedData) <= crypto.KeySize {
+		t.Fatalf("Chunk file too small: %d bytes", len(encryptedData))
+	}
+
+	key := encryptedData[:crypto.KeySize]
+	ciphertext := encryptedData[crypto.KeySize:]
+
+	streamer, err := crypto.NewGCMStreamer(key)
+	if err != nil {
+		t.Fatalf("Failed to create streamer: %v", err)
+	}
+
+	r := bytes.NewReader(ciphertext)
+	d := crypto.NewDecryptor(r, streamer.AEAD, int64(len(ciphertext)))
+
+	decrypted, err := io.ReadAll(d)
+	if err != nil {
+		t.Fatalf("Failed to decrypt chunk: %v", err)
+	}
+
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Errorf("Decrypted data mismatch.\nWant: %s\nGot:  %s", plaintext, decrypted)
+	}
+}
+
+func TestIntegration_Upload_VerifyEncryption(t *testing.T) {
+	app, storageDir := setupTestApp(t)
+	server := httptest.NewServer(app.Routes())
+	defer server.Close()
+
+	plaintext := []byte("Sensitive Data For Full Upload")
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("file", "secret.txt")
+	part.Write(plaintext)
+	writer.Close()
+
+	req, _ := http.NewRequest("POST", server.URL+"/", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	slug := filepath.Base(strings.TrimSpace(string(respBytes)))
+
+	if len(slug) < SlugLength {
+		t.Fatalf("Invalid slug: %s", slug)
+	}
+	keyBase64 := slug[:SlugLength]
+	key, _ := base64.RawURLEncoding.DecodeString(keyBase64)
+	ext := filepath.Ext("secret.txt")
+	id := crypto.GetID(key, ext)
+
+	finalPath := filepath.Join(storageDir, id)
+	finalData, err := os.ReadFile(finalPath)
+	if err != nil {
+		t.Fatalf("Failed to read final file: %v", err)
+	}
+
+	if bytes.Contains(finalData, plaintext) {
+		t.Fatal("Final file contains plaintext!")
+	}
+
+	streamer, _ := crypto.NewGCMStreamer(key)
+	d := crypto.NewDecryptor(bytes.NewReader(finalData), streamer.AEAD, int64(len(finalData)))
+	decrypted, _ := io.ReadAll(d)
+
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Error("Final file decryption failed")
 	}
 }
 
