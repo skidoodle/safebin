@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"mime"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/skidoodle/safebin/internal/crypto"
+	"go.etcd.io/bbolt"
 )
 
 func (app *App) HandleGetFile(writer http.ResponseWriter, request *http.Request) {
@@ -28,11 +30,39 @@ func (app *App) HandleGetFile(writer http.ResponseWriter, request *http.Request)
 	}
 
 	id := crypto.GetID(key, ext)
-	path := filepath.Join(app.Conf.StorageDir, id)
 
+	var meta FileMeta
+	err = app.DB.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(DBBucketName))
+		if b == nil {
+			return fmt.Errorf("bucket not found")
+		}
+		data := b.Get([]byte(id))
+		if data == nil {
+			return fmt.Errorf("file not found")
+		}
+		return json.Unmarshal(data, &meta)
+	})
+
+	if err != nil {
+		app.SendError(writer, request, http.StatusNotFound)
+		return
+	}
+
+	path := filepath.Join(app.Conf.StorageDir, id)
 	info, err := os.Stat(path)
 	if err != nil {
 		app.SendError(writer, request, http.StatusNotFound)
+		return
+	}
+
+	if info.Size() != meta.Size {
+		app.Logger.Error("Integrity check failed: disk size mismatch",
+			"id", id,
+			"disk_bytes", info.Size(),
+			"expected_bytes", meta.Size,
+		)
+		app.SendError(writer, request, http.StatusInternalServerError)
 		return
 	}
 
