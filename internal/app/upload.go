@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -64,7 +63,26 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	app.FinalizeFile(writer, request, tmp, header.Filename)
+	if _, err := tmp.Seek(0, 0); err != nil {
+		app.Logger.Error("Seek failed", "err", err)
+		app.SendError(writer, request, http.StatusInternalServerError)
+		return
+	}
+
+	key, err := crypto.DeriveKey(tmp)
+	if err != nil {
+		app.Logger.Error("Key derivation failed", "err", err)
+		app.SendError(writer, request, http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := tmp.Seek(0, 0); err != nil {
+		app.Logger.Error("Seek failed", "err", err)
+		app.SendError(writer, request, http.StatusInternalServerError)
+		return
+	}
+
+	app.finalizeUpload(writer, request, tmp, key, header.Filename)
 }
 
 func (app *App) HandleChunk(writer http.ResponseWriter, request *http.Request) {
@@ -125,61 +143,48 @@ func (app *App) HandleFinish(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	mergedPath, err := app.mergeChunks(uid, total)
-
+	files, err := app.openChunkFiles(uid, total)
 	if err != nil {
-		app.Logger.Error("Merge failed", "err", err)
-
-		if errors.Is(err, io.ErrShortWrite) {
-			app.SendError(writer, request, http.StatusRequestEntityTooLarge)
-		} else {
-			app.SendError(writer, request, http.StatusInternalServerError)
-		}
-		return
-	}
-
-	defer func() {
-		if removeErr := os.Remove(mergedPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			app.Logger.Error("Failed to remove merged file", "err", removeErr)
-		}
-	}()
-
-	mergedRead, err := os.Open(mergedPath)
-
-	if err != nil {
-		app.Logger.Error("Failed to open merged file", "err", err)
+		app.Logger.Error("Failed to open chunks", "err", err)
 		app.SendError(writer, request, http.StatusInternalServerError)
 		return
 	}
 
 	defer func() {
-		if closeErr := mergedRead.Close(); closeErr != nil {
-			app.Logger.Error("Failed to close merged reader", "err", closeErr)
+		for _, f := range files {
+			_ = f.Close()
+		}
+		if err := os.RemoveAll(filepath.Join(app.Conf.StorageDir, TempDirName, uid)); err != nil {
+			app.Logger.Error("Failed to remove chunk dir", "err", err)
 		}
 	}()
 
-	app.FinalizeFile(writer, request, mergedRead, request.FormValue("filename"))
-
-	if err := os.RemoveAll(filepath.Join(app.Conf.StorageDir, TempDirName, uid)); err != nil {
-		app.Logger.Error("Failed to remove chunk dir", "err", err)
-	}
-}
-
-func (app *App) FinalizeFile(writer http.ResponseWriter, request *http.Request, src *os.File, filename string) {
-	if _, err := src.Seek(0, 0); err != nil {
-		app.Logger.Error("Seek failed", "err", err)
-		app.SendError(writer, request, http.StatusInternalServerError)
-		return
+	readers := make([]io.Reader, len(files))
+	for i, f := range files {
+		readers[i] = f
 	}
 
-	key, err := crypto.DeriveKey(src)
-
+	key, err := crypto.DeriveKey(io.MultiReader(readers...))
 	if err != nil {
 		app.Logger.Error("Key derivation failed", "err", err)
 		app.SendError(writer, request, http.StatusInternalServerError)
 		return
 	}
 
+	for _, f := range files {
+		if _, err := f.Seek(0, 0); err != nil {
+			app.Logger.Error("Failed to reset chunk", "err", err)
+			app.SendError(writer, request, http.StatusInternalServerError)
+			return
+		}
+	}
+
+	multiSrc := io.MultiReader(readers...)
+
+	app.finalizeUpload(writer, request, multiSrc, key, request.FormValue("filename"))
+}
+
+func (app *App) finalizeUpload(writer http.ResponseWriter, request *http.Request, src io.Reader, key []byte, filename string) {
 	ext := filepath.Ext(filename)
 	id := crypto.GetID(key, ext)
 	finalPath := filepath.Join(app.Conf.StorageDir, id)
@@ -189,12 +194,6 @@ func (app *App) FinalizeFile(writer http.ResponseWriter, request *http.Request, 
 			app.Logger.Error("Failed to update metadata for existing file", "err", err)
 		}
 		app.RespondWithLink(writer, request, key, filename)
-		return
-	}
-
-	if _, err := src.Seek(0, 0); err != nil {
-		app.Logger.Error("Seek failed", "err", err)
-		app.SendError(writer, request, http.StatusInternalServerError)
 		return
 	}
 

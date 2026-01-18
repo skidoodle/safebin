@@ -10,46 +10,6 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-func TestCleanup_AbandonedMerge(t *testing.T) {
-	tmpDir := t.TempDir()
-	tmpStorage := filepath.Join(tmpDir, TempDirName)
-	if err := os.MkdirAll(tmpStorage, 0700); err != nil {
-		t.Fatalf("MkdirAll failed: %v", err)
-	}
-
-	db, err := InitDB(tmpDir)
-	if err != nil {
-		t.Fatalf("InitDB failed: %v", err)
-	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("Failed to close DB: %v", err)
-		}
-	}()
-
-	app := &App{
-		Conf:   Config{StorageDir: tmpDir},
-		Logger: discardLogger(),
-		DB:     db,
-	}
-
-	abandonedFile := filepath.Join(tmpStorage, "m_abandoned_upload_id")
-	if err := os.WriteFile(abandonedFile, []byte("partial data"), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	oldTime := time.Now().Add(-TempExpiry - time.Hour)
-	if err := os.Chtimes(abandonedFile, oldTime, oldTime); err != nil {
-		t.Fatal(err)
-	}
-
-	app.CleanTemp(tmpStorage)
-
-	if _, err := os.Stat(abandonedFile); !os.IsNotExist(err) {
-		t.Error("Cleanup failed to remove abandoned merge file from crashed session")
-	}
-}
-
 func TestCleanup_AbandonedChunks(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpStorage := filepath.Join(tmpDir, TempDirName)

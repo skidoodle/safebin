@@ -55,48 +55,26 @@ func (app *App) saveChunk(uid string, idx int, src io.Reader) error {
 	return nil
 }
 
-func (app *App) mergeChunks(uid string, total int) (string, error) {
-	tmpPath := filepath.Join(app.Conf.StorageDir, TempDirName, "m_"+uid)
+func (app *App) openChunkFiles(uid string, total int) ([]*os.File, error) {
+	files := make([]*os.File, 0, total)
 
-	merged, err := os.Create(tmpPath)
-	if err != nil {
-		return "", fmt.Errorf("create merge file: %w", err)
-	}
-
-	defer func() {
-		if closeErr := merged.Close(); closeErr != nil {
-			app.Logger.Error("Failed to close merged file", "err", closeErr)
+	closeAll := func() {
+		for _, f := range files {
+			_ = f.Close()
 		}
-	}()
-
-	limit := app.Conf.MaxMB * MegaByte
-	var written int64
+	}
 
 	for i := range total {
 		partPath := filepath.Join(app.Conf.StorageDir, TempDirName, uid, strconv.Itoa(i))
-
-		part, err := os.Open(partPath)
+		f, err := os.Open(partPath)
 		if err != nil {
-			return "", fmt.Errorf("open chunk %d: %w", i, err)
+			closeAll()
+			return nil, fmt.Errorf("open chunk %d: %w", i, err)
 		}
-
-		n, err := io.Copy(merged, part)
-
-		if closeErr := part.Close(); closeErr != nil {
-			app.Logger.Error("Failed to close chunk part", "err", closeErr)
-		}
-
-		if err != nil {
-			return "", fmt.Errorf("append chunk %d: %w", i, err)
-		}
-
-		written += n
-		if written > limit {
-			return "", io.ErrShortWrite
-		}
+		files = append(files, f)
 	}
 
-	return tmpPath, nil
+	return files, nil
 }
 
 func (app *App) encryptAndSave(src io.Reader, key []byte, finalPath string) error {
