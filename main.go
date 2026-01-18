@@ -10,15 +10,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/skidoodle/safebin/internal/app"
-)
-
-const (
-	permUserRWX     = 0o700
-	serverTimeout   = 10 * time.Minute
-	shutdownTimeout = 10 * time.Second
 )
 
 func main() {
@@ -34,7 +27,7 @@ func main() {
 	)
 
 	tmpDir := filepath.Join(cfg.StorageDir, "tmp")
-	if err := os.MkdirAll(tmpDir, permUserRWX); err != nil {
+	if err := os.MkdirAll(tmpDir, app.PermUserRWX); err != nil {
 		logger.Error("Failed to initialize storage directory", "err", err)
 		os.Exit(1)
 	}
@@ -53,9 +46,9 @@ func main() {
 	srv := &http.Server{
 		Addr:         cfg.Addr,
 		Handler:      application.Routes(),
-		ReadTimeout:  serverTimeout,
-		WriteTimeout: serverTimeout,
-		IdleTimeout:  serverTimeout,
+		ReadTimeout:  app.ServerTimeout,
+		WriteTimeout: app.ServerTimeout,
+		IdleTimeout:  app.ServerTimeout,
 	}
 
 	go func() {
@@ -70,7 +63,7 @@ func main() {
 	<-ctx.Done()
 	application.Logger.Info("Shutting down gracefully...")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), app.ShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {

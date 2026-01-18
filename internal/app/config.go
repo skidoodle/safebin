@@ -7,6 +7,30 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"time"
+)
+
+const (
+	DefaultHost     = "0.0.0.0"
+	DefaultPort     = 8080
+	DefaultStorage  = "./storage"
+	DefaultMaxMB    = 512
+	ServerTimeout   = 10 * time.Minute
+	ShutdownTimeout = 10 * time.Second
+
+	UploadChunkSize    = 8 << 20
+	MaxRequestOverhead = 10 << 20
+	PermUserRWX        = 0o700
+	MegaByte           = 1 << 20
+	ChunkSafetyMargin  = 2
+
+	SlugLength = 22
+	KeyLength  = 16
+
+	CleanupInterval = 1 * time.Hour
+	TempExpiry      = 4 * time.Hour
+	MinRetention    = 24 * time.Hour
+	MaxRetention    = 365 * 24 * time.Hour
 )
 
 type Config struct {
@@ -21,18 +45,11 @@ type App struct {
 	Logger *slog.Logger
 }
 
-const (
-	defaultHost = "0.0.0.0"
-	defaultPort  = 8080
-	defaultStorage = "./storage"
-	defaultMaxMB = 512
-)
-
 func LoadConfig() Config {
-	hostEnv := getEnv("SAFEBIN_HOST", defaultHost)
-	portEnv := getEnvInt("SAFEBIN_PORT", defaultPort)
-	storageEnv := getEnv("SAFEBIN_STORAGE", defaultStorage)
-	maxMBEnv := int64(getEnvInt("SAFEBIN_MAX_MB", defaultMaxMB))
+	hostEnv := getEnv("SAFEBIN_HOST", DefaultHost)
+	portEnv := getEnvInt("SAFEBIN_PORT", DefaultPort)
+	storageEnv := getEnv("SAFEBIN_STORAGE", DefaultStorage)
+	maxMBEnv := int64(getEnvInt("SAFEBIN_MAX_MB", DefaultMaxMB))
 
 	var host string
 	var port int
@@ -56,7 +73,6 @@ func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
 	}
-
 	return fallback
 }
 
@@ -67,7 +83,6 @@ func getEnvInt(key string, fallback int) int {
 			return i
 		}
 	}
-
 	return fallback
 }
 

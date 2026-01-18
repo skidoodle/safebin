@@ -21,6 +21,17 @@ func (app *App) Routes() *http.ServeMux {
 	return mux
 }
 
+func (app *App) HandleHome(writer http.ResponseWriter, request *http.Request) {
+	err := app.Tmpl.ExecuteTemplate(writer, "base", map[string]any{
+		"MaxMB": app.Conf.MaxMB,
+		"Host":  request.Host,
+	})
+
+	if err != nil {
+		app.Logger.Error("Template error", "err", err)
+	}
+}
+
 func (app *App) RespondWithLink(writer http.ResponseWriter, request *http.Request, key []byte, originalName string) {
 	keySlug := base64.RawURLEncoding.EncodeToString(key)
 	ext := filepath.Ext(originalName)
@@ -42,12 +53,10 @@ func (app *App) RespondWithLink(writer http.ResponseWriter, request *http.Reques
 		if _, err := fmt.Fprintf(writer, html, link); err != nil {
 			app.Logger.Error("Failed to write response", "err", err)
 		}
-
 		return
 	}
 
 	scheme := "https"
-
 	if request.TLS == nil {
 		scheme = "http"
 	}
@@ -72,7 +81,6 @@ func (app *App) SendError(writer http.ResponseWriter, request *http.Request, cod
 		if _, err := fmt.Fprintf(writer, html, code); err != nil {
 			app.Logger.Error("Failed to write error response", "err", err)
 		}
-
 		return
 	}
 
