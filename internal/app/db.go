@@ -27,7 +27,7 @@ func InitDB(storageDir string) (*bbolt.DB, error) {
 	})
 
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 

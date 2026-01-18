@@ -22,7 +22,9 @@ func TestDeriveKey(t *testing.T) {
 		t.Errorf("Expected key length 16, got %d", len(key1))
 	}
 
-	reader.Seek(0, 0)
+	if _, err := reader.Seek(0, 0); err != nil {
+		t.Fatalf("Seek failed: %v", err)
+	}
 	key2, err := crypto.DeriveKey(reader)
 	if err != nil {
 		t.Fatalf("DeriveKey failed second time: %v", err)
@@ -51,10 +53,14 @@ func TestGetID(t *testing.T) {
 func TestEncryptDecryptStream(t *testing.T) {
 	payloadSize := (64 * 1024) * 3
 	payload := make([]byte, payloadSize)
-	rand.Read(payload)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatalf("rand.Read payload failed: %v", err)
+	}
 
 	key := make([]byte, 16)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("rand.Read key failed: %v", err)
+	}
 
 	var encryptedBuf bytes.Buffer
 	streamer, err := crypto.NewGCMStreamer(key)
@@ -92,11 +98,15 @@ func TestDecryptorSeeking(t *testing.T) {
 	}
 
 	key := make([]byte, 16)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("rand.Read key failed: %v", err)
+	}
 
 	var encryptedBuf bytes.Buffer
 	streamer, _ := crypto.NewGCMStreamer(key)
-	streamer.EncryptStream(&encryptedBuf, bytes.NewReader(payload))
+	if err := streamer.EncryptStream(&encryptedBuf, bytes.NewReader(payload)); err != nil {
+		t.Fatalf("EncryptStream failed: %v", err)
+	}
 
 	r := bytes.NewReader(encryptedBuf.Bytes())
 	d := crypto.NewDecryptor(r, streamer.AEAD, int64(encryptedBuf.Len()))

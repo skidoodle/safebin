@@ -17,7 +17,11 @@ func TestInitDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitDB failed: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Failed to close DB: %v", err)
+		}
+	}()
 
 	dbPath := filepath.Join(tmpDir, DBFileName)
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
@@ -42,7 +46,11 @@ func TestDB_MetadataLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Failed to close DB: %v", err)
+		}
+	}()
 
 	app := &App{
 		Conf: Config{StorageDir: tmpDir, MaxMB: 100},
