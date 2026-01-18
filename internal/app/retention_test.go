@@ -29,8 +29,8 @@ func TestCalculateRetention(t *testing.T) {
 		{
 			name:     "Half size file (Somewhere in between)",
 			fileSize: 50 * MegaByte,
-			wantMin: 24 * time.Hour,
-			wantMax: MaxRetention,
+			wantMin:  24 * time.Hour,
+			wantMax:  MaxRetention,
 		},
 		{
 			name:     "Oversized file (Min retention)",

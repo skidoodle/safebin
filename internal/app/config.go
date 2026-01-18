@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log/slog"
 	"os"
 	"strconv"
@@ -36,7 +37,7 @@ const (
 
 	DBFileName   = "safebin.db"
 	DBBucketName = "files"
-	TempDirName = "tmp"
+	TempDirName  = "tmp"
 )
 
 type Config struct {
@@ -50,6 +51,7 @@ type App struct {
 	Tmpl   *template.Template
 	Logger *slog.Logger
 	DB     *bbolt.DB
+	Assets fs.FS
 }
 
 func LoadConfig() Config {
@@ -93,6 +95,6 @@ func getEnvInt(key string, fallback int) int {
 	return fallback
 }
 
-func ParseTemplates() *template.Template {
-	return template.Must(template.ParseGlob("./web/templates/*.html"))
+func ParseTemplates(fsys fs.FS) *template.Template {
+	return template.Must(template.ParseFS(fsys, "*.html"))
 }

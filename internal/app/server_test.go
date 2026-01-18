@@ -3,7 +3,6 @@ package app
 import (
 	"bytes"
 	"fmt"
-	"html/template"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -19,12 +18,14 @@ func setupTestApp(t *testing.T) (*App, string) {
 	storageDir := t.TempDir()
 	os.MkdirAll(filepath.Join(storageDir, TempDirName), 0700)
 
-	tmplDir := filepath.Join(storageDir, "templates")
-	os.MkdirAll(tmplDir, 0700)
-	os.WriteFile(filepath.Join(tmplDir, "base.html"), []byte(`{{define "base"}}{{template "content" .}}{{end}}`), 0600)
-	os.WriteFile(filepath.Join(tmplDir, "index.html"), []byte(`{{define "content"}}OK{{end}}`), 0600)
+	webDir := filepath.Join(storageDir, "web")
+	os.MkdirAll(webDir, 0700)
 
-	tmpl := template.Must(template.New("base").Parse(`{{define "base"}}OK{{end}}`))
+	os.WriteFile(filepath.Join(webDir, "layout.html"), []byte(`{{define "layout"}}{{template "content" .}}{{end}}`), 0600)
+	os.WriteFile(filepath.Join(webDir, "home.html"), []byte(`{{define "content"}}OK{{end}}`), 0600)
+
+	testFS := os.DirFS(webDir)
+	tmpl := ParseTemplates(testFS)
 
 	db, err := InitDB(storageDir)
 	if err != nil {
@@ -39,6 +40,7 @@ func setupTestApp(t *testing.T) (*App, string) {
 		},
 		Logger: discardLogger(),
 		Tmpl:   tmpl,
+		Assets: testFS,
 		DB:     db,
 	}
 

@@ -5,13 +5,29 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 )
 
 func (app *App) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	fileServer := http.FileServer(http.Dir("./web/static"))
 
-	mux.Handle("GET /static/", http.StripPrefix("/static/", fileServer))
+	fileServer := http.FileServer(http.FS(app.Assets))
+
+	staticHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "" || strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		if strings.HasSuffix(r.URL.Path, ".html") {
+			http.NotFound(w, r)
+			return
+		}
+
+		fileServer.ServeHTTP(w, r)
+	})
+
+	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler))
 	mux.HandleFunc("GET /{$}", app.HandleHome)
 	mux.HandleFunc("POST /{$}", app.HandleUpload)
 	mux.HandleFunc("POST /upload/chunk", app.HandleChunk)
@@ -22,7 +38,7 @@ func (app *App) Routes() *http.ServeMux {
 }
 
 func (app *App) HandleHome(writer http.ResponseWriter, request *http.Request) {
-	err := app.Tmpl.ExecuteTemplate(writer, "base", map[string]any{
+	err := app.Tmpl.ExecuteTemplate(writer, "layout", map[string]any{
 		"MaxMB": app.Conf.MaxMB,
 		"Host":  request.Host,
 	})

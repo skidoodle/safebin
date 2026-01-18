@@ -1,12 +1,12 @@
-{{define "base"}}
+{{define "layout"}}
 <!doctype html>
 <html lang="en">
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <link rel="icon" href="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" />
+        <link rel="icon" type="image/vnd.microsoft.icon" href="/static/favicon.ico" />
         <title>safebin</title>
-        <link rel="stylesheet" href="/static/css/style.css" />
+        <link rel="stylesheet" href="/static/style.css" />
     </head>
     <body>
         <div class="container">
@@ -31,7 +31,7 @@
             </section>
         </div>
         <input type="file" id="file-input" class="hidden" />
-        <script src="/static/js/app.js"></script>
+        <script src="/static/app.js"></script>
     </body>
 </html>
 {{end}}

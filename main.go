@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/skidoodle/safebin/internal/app"
+	"github.com/skidoodle/safebin/web"
 )
 
 func main() {
@@ -46,7 +47,8 @@ func main() {
 	application := &app.App{
 		Conf:   cfg,
 		Logger: logger,
-		Tmpl:   app.ParseTemplates(),
+		Tmpl:   app.ParseTemplates(web.Assets),
+		Assets: web.Assets,
 		DB:     db,
 	}
 

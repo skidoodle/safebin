@@ -31,7 +31,6 @@ RUN useradd -m -u 10001 -s /bin/bash appuser
 WORKDIR /app
 
 COPY --from=builder /app/safebin .
-COPY --from=builder /app/web ./web
 
 RUN mkdir -p /app/storage && chown 10001:10001 /app/storage
 VOLUME ["/app/storage"]
