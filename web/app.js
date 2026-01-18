@@ -50,7 +50,7 @@ async function handleUpload(file) {
   $("busy-state").classList.remove("hidden");
   $("p-bar-container").classList.add("visible");
 
-  const uploadID = Math.random().toString(36).substring(2, 15);
+  const uploadID = Array.from(window.crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
   const chunkSize = 1024 * 1024 * 8;
   const total = Math.ceil(file.size / chunkSize);
 
