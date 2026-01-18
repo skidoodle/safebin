@@ -22,6 +22,7 @@ const (
 	ShutdownTimeout = 10 * time.Second
 
 	UploadChunkSize    = 8 << 20
+	MinChunkSize       = 1 << 20
 	MaxRequestOverhead = 10 << 20
 	PermUserRWX        = 0o700
 	MegaByte           = 1 << 20

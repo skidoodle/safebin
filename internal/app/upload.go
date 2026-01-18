@@ -112,7 +112,7 @@ func (app *App) HandleChunk(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	maxChunks := int((app.Conf.MaxMB*MegaByte)/UploadChunkSize) + ChunkSafetyMargin
+	maxChunks := int((app.Conf.MaxMB*MegaByte)/MinChunkSize) + ChunkSafetyMargin
 
 	if !reUploadID.MatchString(uid) || idx > maxChunks || idx < 0 {
 		app.SendError(writer, request, http.StatusBadRequest)
@@ -148,7 +148,7 @@ func (app *App) HandleFinish(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	maxChunks := int((app.Conf.MaxMB*MegaByte)/UploadChunkSize) + ChunkSafetyMargin
+	maxChunks := int((app.Conf.MaxMB*MegaByte)/MinChunkSize) + ChunkSafetyMargin
 
 	if !reUploadID.MatchString(uid) || total > maxChunks || total <= 0 {
 		app.SendError(writer, request, http.StatusBadRequest)

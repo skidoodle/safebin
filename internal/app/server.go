@@ -72,9 +72,12 @@ func (app *App) RespondWithLink(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 
-	scheme := "https"
-	if request.TLS == nil {
-		scheme = "http"
+	scheme := request.Header.Get("X-Forwarded-Proto")
+	if scheme == "" {
+		scheme = "https"
+		if request.TLS == nil {
+			scheme = "http"
+		}
 	}
 
 	if _, err := fmt.Fprintf(writer, "%s://%s\n", scheme, link); err != nil {

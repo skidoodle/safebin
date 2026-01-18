@@ -16,6 +16,7 @@ type Decryptor struct {
 	aead       cipher.AEAD
 	size       int64
 	offset     int64
+	phyOffset  int64
 }
 
 func NewDecryptor(readSeeker io.ReadSeeker, aead cipher.AEAD, encryptedSize int64) *Decryptor {
@@ -35,6 +36,7 @@ func NewDecryptor(readSeeker io.ReadSeeker, aead cipher.AEAD, encryptedSize int6
 		aead:       aead,
 		size:       plainSize,
 		offset:     0,
+		phyOffset:  -1,
 	}
 }
 
@@ -49,14 +51,22 @@ func (d *Decryptor) Read(buf []byte) (int, error) {
 	overhead := int64(d.aead.Overhead())
 	actualChunkSize := int64(GCMChunkSize) + overhead
 
-	_, err := d.readSeeker.Seek(chunkIdx*actualChunkSize, io.SeekStart)
-	if err != nil {
-		return 0, fmt.Errorf("failed to seek: %w", err)
+	targetOffset := chunkIdx * actualChunkSize
+
+	if d.phyOffset != targetOffset {
+		if _, err := d.readSeeker.Seek(targetOffset, io.SeekStart); err != nil {
+			return 0, fmt.Errorf("failed to seek: %w", err)
+		}
+		d.phyOffset = targetOffset
 	}
 
 	encrypted := make([]byte, actualChunkSize)
 
 	bytesRead, err := io.ReadFull(d.readSeeker, encrypted)
+	if bytesRead > 0 {
+		d.phyOffset += int64(bytesRead)
+	}
+
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return 0, fmt.Errorf("failed to read encrypted data: %w", err)
 	}
