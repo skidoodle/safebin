@@ -23,7 +23,7 @@ func TestInitDB(t *testing.T) {
 		}
 	}()
 
-	dbPath := filepath.Join(tmpDir, DBFileName)
+	dbPath := filepath.Join(tmpDir, DBDirName, DBFileName)
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		t.Error("Database file was not created")
 	}

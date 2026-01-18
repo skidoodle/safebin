@@ -67,7 +67,11 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 		errChan <- err
 	}()
 
-	defer pr.Close()
+	defer func() {
+		if closeErr := pr.Close(); closeErr != nil {
+			app.Logger.Error("Failed to close pipe reader", "err", closeErr)
+		}
+	}()
 
 	streamer, err := crypto.NewGCMStreamer(ephemeralKey)
 	if err != nil {

@@ -233,9 +233,16 @@ func TestIntegration_Upload_VerifyEncryption(t *testing.T) {
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("file", "secret.txt")
-	part.Write(plaintext)
-	writer.Close()
+	part, err := writer.CreateFormFile("file", "secret.txt")
+	if err != nil {
+		t.Fatalf("CreateFormFile failed: %v", err)
+	}
+	if _, err := part.Write(plaintext); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Writer close failed: %v", err)
+	}
 
 	req, _ := http.NewRequest("POST", server.URL+"/", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -243,7 +250,11 @@ func TestIntegration_Upload_VerifyEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("Failed to close response body: %v", err)
+		}
+	}()
 
 	respBytes, _ := io.ReadAll(resp.Body)
 	slug := filepath.Base(strings.TrimSpace(string(respBytes)))

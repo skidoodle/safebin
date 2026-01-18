@@ -36,6 +36,7 @@ const (
 	MinRetention    = 24 * time.Hour
 	MaxRetention    = 365 * 24 * time.Hour
 
+	DBDirName         = "db"
 	DBFileName        = "safebin.db"
 	DBBucketName      = "files"
 	DBBucketIndexName = "expiry_index"

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"time"
 
@@ -15,7 +16,12 @@ type FileMeta struct {
 }
 
 func InitDB(storageDir string) (*bbolt.DB, error) {
-	path := filepath.Join(storageDir, DBFileName)
+	dbDir := filepath.Join(storageDir, DBDirName)
+	if err := os.MkdirAll(dbDir, PermUserRWX); err != nil {
+		return nil, err
+	}
+
+	path := filepath.Join(dbDir, DBFileName)
 	db, err := bbolt.Open(path, 0600, &bbolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		return nil, err
