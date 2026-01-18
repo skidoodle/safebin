@@ -8,6 +8,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"go.etcd.io/bbolt"
 )
 
 const (
@@ -31,6 +33,10 @@ const (
 	TempExpiry      = 4 * time.Hour
 	MinRetention    = 24 * time.Hour
 	MaxRetention    = 365 * 24 * time.Hour
+
+	DBFileName   = "safebin.db"
+	DBBucketName = "files"
+	TempDirName = "tmp"
 )
 
 type Config struct {
@@ -43,6 +49,7 @@ type App struct {
 	Conf   Config
 	Tmpl   *template.Template
 	Logger *slog.Logger
+	DB     *bbolt.DB
 }
 
 func LoadConfig() Config {

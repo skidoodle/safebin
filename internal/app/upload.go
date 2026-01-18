@@ -36,7 +36,7 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 		}
 	}()
 
-	tmp, err := os.CreateTemp(filepath.Join(app.Conf.StorageDir, "tmp"), "up_*")
+	tmp, err := os.CreateTemp(filepath.Join(app.Conf.StorageDir, TempDirName), "up_*")
 
 	if err != nil {
 		app.Logger.Error("Failed to create temp file", "err", err)
@@ -160,7 +160,7 @@ func (app *App) HandleFinish(writer http.ResponseWriter, request *http.Request) 
 
 	app.FinalizeFile(writer, request, mergedRead, request.FormValue("filename"))
 
-	if err := os.RemoveAll(filepath.Join(app.Conf.StorageDir, "tmp", uid)); err != nil {
+	if err := os.RemoveAll(filepath.Join(app.Conf.StorageDir, TempDirName, uid)); err != nil {
 		app.Logger.Error("Failed to remove chunk dir", "err", err)
 	}
 }
@@ -184,7 +184,10 @@ func (app *App) FinalizeFile(writer http.ResponseWriter, request *http.Request, 
 	id := crypto.GetID(key, ext)
 	finalPath := filepath.Join(app.Conf.StorageDir, id)
 
-	if _, err := os.Stat(finalPath); err == nil {
+	if info, err := os.Stat(finalPath); err == nil {
+		if err := app.RegisterFile(id, info.Size()); err != nil {
+			app.Logger.Error("Failed to update metadata for existing file", "err", err)
+		}
 		app.RespondWithLink(writer, request, key, filename)
 		return
 	}
@@ -199,6 +202,14 @@ func (app *App) FinalizeFile(writer http.ResponseWriter, request *http.Request, 
 		app.Logger.Error("Encryption failed", "err", err)
 		app.SendError(writer, request, http.StatusInternalServerError)
 		return
+	}
+
+	if info, err := os.Stat(finalPath); err == nil {
+		if err := app.RegisterFile(id, info.Size()); err != nil {
+			app.Logger.Error("Failed to save metadata", "err", err)
+		}
+	} else {
+		app.Logger.Error("Failed to stat new file", "err", err)
 	}
 
 	app.RespondWithLink(writer, request, key, filename)

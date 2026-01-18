@@ -26,16 +26,28 @@ func main() {
 		"max_file_size", fmt.Sprintf("%dMB", cfg.MaxMB),
 	)
 
-	tmpDir := filepath.Join(cfg.StorageDir, "tmp")
+	tmpDir := filepath.Join(cfg.StorageDir, app.TempDirName)
 	if err := os.MkdirAll(tmpDir, app.PermUserRWX); err != nil {
 		logger.Error("Failed to initialize storage directory", "err", err)
 		os.Exit(1)
 	}
 
+	db, err := app.InitDB(cfg.StorageDir)
+	if err != nil {
+		logger.Error("Failed to initialize database", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			logger.Error("Failed to close database", "err", err)
+		}
+	}()
+
 	application := &app.App{
 		Conf:   cfg,
 		Logger: logger,
 		Tmpl:   app.ParseTemplates(),
+		DB:     db,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

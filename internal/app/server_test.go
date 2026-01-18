@@ -17,7 +17,7 @@ import (
 
 func setupTestApp(t *testing.T) (*App, string) {
 	storageDir := t.TempDir()
-	os.MkdirAll(filepath.Join(storageDir, "tmp"), 0700)
+	os.MkdirAll(filepath.Join(storageDir, TempDirName), 0700)
 
 	tmplDir := filepath.Join(storageDir, "templates")
 	os.MkdirAll(tmplDir, 0700)
@@ -26,6 +26,12 @@ func setupTestApp(t *testing.T) (*App, string) {
 
 	tmpl := template.Must(template.New("base").Parse(`{{define "base"}}OK{{end}}`))
 
+	db, err := InitDB(storageDir)
+	if err != nil {
+		t.Fatalf("Failed to init db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
 	app := &App{
 		Conf: Config{
 			StorageDir: storageDir,
@@ -33,6 +39,7 @@ func setupTestApp(t *testing.T) (*App, string) {
 		},
 		Logger: discardLogger(),
 		Tmpl:   tmpl,
+		DB:     db,
 	}
 
 	return app, storageDir

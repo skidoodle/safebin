@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skidoodle/safebin/internal/crypto"
+	"go.etcd.io/bbolt"
 )
 
 func (app *App) StartCleanupTask(ctx context.Context) {
@@ -22,14 +24,14 @@ func (app *App) StartCleanupTask(ctx context.Context) {
 			ticker.Stop()
 			return
 		case <-ticker.C:
-			app.CleanStorage(app.Conf.StorageDir)
-			app.CleanTemp(filepath.Join(app.Conf.StorageDir, "tmp"))
+			app.CleanStorage()
+			app.CleanTemp(filepath.Join(app.Conf.StorageDir, TempDirName))
 		}
 	}
 }
 
 func (app *App) saveChunk(uid string, idx int, src io.Reader) error {
-	dir := filepath.Join(app.Conf.StorageDir, "tmp", uid)
+	dir := filepath.Join(app.Conf.StorageDir, TempDirName, uid)
 
 	if err := os.MkdirAll(dir, PermUserRWX); err != nil {
 		return fmt.Errorf("create chunk dir: %w", err)
@@ -54,7 +56,7 @@ func (app *App) saveChunk(uid string, idx int, src io.Reader) error {
 }
 
 func (app *App) mergeChunks(uid string, total int) (string, error) {
-	tmpPath := filepath.Join(app.Conf.StorageDir, "tmp", "m_"+uid)
+	tmpPath := filepath.Join(app.Conf.StorageDir, TempDirName, "m_"+uid)
 
 	merged, err := os.Create(tmpPath)
 	if err != nil {
@@ -71,7 +73,7 @@ func (app *App) mergeChunks(uid string, total int) (string, error) {
 	var written int64
 
 	for i := range total {
-		partPath := filepath.Join(app.Conf.StorageDir, "tmp", uid, strconv.Itoa(i))
+		partPath := filepath.Join(app.Conf.StorageDir, TempDirName, uid, strconv.Itoa(i))
 
 		part, err := os.Open(partPath)
 		if err != nil {
@@ -139,26 +141,72 @@ func (app *App) encryptAndSave(src io.Reader, key []byte, finalPath string) erro
 	return nil
 }
 
-func (app *App) CleanStorage(path string) {
-	entries, err := os.ReadDir(path)
+func (app *App) RegisterFile(id string, size int64) error {
+	retention := CalculateRetention(size, app.Conf.MaxMB)
+	meta := FileMeta{
+		ID:        id,
+		Size:      size,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(retention),
+	}
+
+	return app.DB.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(DBBucketName))
+		data, err := json.Marshal(meta)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(id), data)
+	})
+}
+
+func (app *App) CleanStorage() {
+	now := time.Now()
+	var toDelete []string
+
+	err := app.DB.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(DBBucketName))
+		c := b.Cursor()
+
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var meta FileMeta
+			if err := json.Unmarshal(v, &meta); err != nil {
+				continue
+			}
+
+			if now.After(meta.ExpiresAt) {
+				toDelete = append(toDelete, string(k))
+			}
+		}
+		return nil
+	})
+
 	if err != nil {
-		app.Logger.Error("Failed to read storage dir", "err", err)
+		app.Logger.Error("Failed to view DB for cleanup", "err", err)
 		return
 	}
 
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
+	if len(toDelete) == 0 {
+		return
+	}
 
-		expiry := CalculateRetention(info.Size(), app.Conf.MaxMB)
+	err = app.DB.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(DBBucketName))
+		for _, id := range toDelete {
+			path := filepath.Join(app.Conf.StorageDir, id)
+			if err := os.RemoveAll(path); err != nil {
+				app.Logger.Error("Failed to remove expired file", "path", id, "err", err)
+			}
 
-		if time.Since(info.ModTime()) > expiry {
-			if err := os.RemoveAll(filepath.Join(path, entry.Name())); err != nil {
-				app.Logger.Error("Failed to remove expired file", "path", entry.Name(), "err", err)
+			if err := b.Delete([]byte(id)); err != nil {
+				app.Logger.Error("Failed to delete metadata", "id", id, "err", err)
 			}
 		}
+		return nil
+	})
+
+	if err != nil {
+		app.Logger.Error("Failed to update DB during cleanup", "err", err)
 	}
 }
 
