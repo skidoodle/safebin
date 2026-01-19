@@ -9,10 +9,11 @@ COPY . .
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
 
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X github.com/skidoodle/safebin/internal/app.Version=$VERSION" \
     -trimpath \
     -o /app/safebin .
 

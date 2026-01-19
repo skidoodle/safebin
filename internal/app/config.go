@@ -13,6 +13,10 @@ import (
 	"go.etcd.io/bbolt"
 )
 
+var (
+	Version = "dev"
+)
+
 const (
 	DefaultHost     = "0.0.0.0"
 	DefaultPort     = 8080

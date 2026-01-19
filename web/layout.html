@@ -29,6 +29,15 @@
                 <div class="dim cli-label">CLI Usage</div>
                 <pre class="cli-pre">curl -F file=@yourfile {{.Host}}</pre>
             </section>
+            <footer class="footer">
+                <div class="dim">
+                    {{if eq .Version "dev"}}
+                    <a href="https://github.com/skidoodle/safebin" target="_blank" rel="noopener noreferrer">dev</a>
+                    {{else}}
+                    <a href="https://github.com/skidoodle/safebin/releases/tag/v{{.Version}}" target="_blank" rel="noopener noreferrer">v{{.Version}}</a>
+                    {{end}}
+                </div>
+            </footer>
         </div>
         <input type="file" id="file-input" class="hidden" />
         <script src="/static/app.js"></script>

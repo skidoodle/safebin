@@ -39,8 +39,9 @@ func (app *App) Routes() *http.ServeMux {
 
 func (app *App) HandleHome(writer http.ResponseWriter, request *http.Request) {
 	err := app.Tmpl.ExecuteTemplate(writer, "layout", map[string]any{
-		"MaxMB": app.Conf.MaxMB,
-		"Host":  request.Host,
+		"MaxMB":   app.Conf.MaxMB,
+		"Host":    request.Host,
+		"Version": Version,
 	})
 
 	if err != nil {
