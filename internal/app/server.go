@@ -11,23 +11,7 @@ import (
 func (app *App) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	fileServer := http.FileServer(http.FS(app.Assets))
-
-	staticHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "" || strings.HasSuffix(r.URL.Path, "/") {
-			http.NotFound(w, r)
-			return
-		}
-
-		if strings.HasSuffix(r.URL.Path, ".html") {
-			http.NotFound(w, r)
-			return
-		}
-
-		fileServer.ServeHTTP(w, r)
-	})
-
-	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler))
+	mux.Handle("GET /static/", http.StripPrefix("/static/", app.handleStatic()))
 	mux.HandleFunc("GET /{$}", app.HandleHome)
 	mux.HandleFunc("POST /{$}", app.HandleUpload)
 	mux.HandleFunc("POST /upload/chunk", app.HandleChunk)
@@ -35,6 +19,18 @@ func (app *App) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /{slug}", app.HandleGetFile)
 
 	return mux
+}
+
+func (app *App) handleStatic() http.Handler {
+	fs := http.FileServer(http.FS(app.Assets))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "" || strings.HasSuffix(r.URL.Path, "/") || strings.HasSuffix(r.URL.Path, ".html") {
+			http.NotFound(w, r)
+			return
+		}
+		fs.ServeHTTP(w, r)
+	})
 }
 
 func (app *App) HandleHome(writer http.ResponseWriter, request *http.Request) {
@@ -52,7 +48,16 @@ func (app *App) HandleHome(writer http.ResponseWriter, request *http.Request) {
 func (app *App) RespondWithLink(writer http.ResponseWriter, request *http.Request, key []byte, originalName string) {
 	keySlug := base64.RawURLEncoding.EncodeToString(key)
 	ext := filepath.Ext(originalName)
-	link := fmt.Sprintf("%s/%s%s", request.Host, keySlug, ext)
+
+	const unsafeChars = "\"<> \\/:;?@[]^`{}|~"
+	safeExt := strings.Map(func(r rune) rune {
+		if strings.ContainsRune(unsafeChars, r) {
+			return -1
+		}
+		return r
+	}, ext)
+
+	link := fmt.Sprintf("%s/%s%s", request.Host, keySlug, safeExt)
 
 	if request.Header.Get("X-Requested-With") == "XMLHttpRequest" {
 		html := `

@@ -84,20 +84,16 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 		errChan <- err
 	}()
 
-	defer func() {
-		if closeErr := pr.Close(); closeErr != nil {
-			app.Logger.Error("Failed to close pipe reader", "err", closeErr)
-		}
-	}()
-
 	streamer, err := crypto.NewGCMStreamer(ephemeralKey)
 	if err != nil {
+		_ = pr.Close()
 		app.Logger.Error("Failed to create streamer", "err", err)
 		app.SendError(writer, request, http.StatusInternalServerError)
 		return
 	}
 
 	if err := streamer.EncryptStream(tmp, pr); err != nil {
+		_ = pr.Close()
 		app.Logger.Error("Failed to encrypt stream", "err", err)
 		app.SendError(writer, request, http.StatusInternalServerError)
 		return
@@ -128,7 +124,8 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (app *App) HandleChunk(writer http.ResponseWriter, request *http.Request) {
-	request.Body = http.MaxBytesReader(writer, request.Body, MaxRequestOverhead)
+	const MaxChunkBody = UploadChunkSize + (1 << 20)
+	request.Body = http.MaxBytesReader(writer, request.Body, MaxChunkBody)
 
 	uid := request.FormValue("upload_id")
 	idx, err := strconv.Atoi(request.FormValue("index"))
@@ -146,7 +143,7 @@ func (app *App) HandleChunk(writer http.ResponseWriter, request *http.Request) {
 
 	file, _, err := request.FormFile("chunk")
 	if err != nil {
-		if err.Error() == "http: request body too large" {
+		if strings.Contains(err.Error(), "request body too large") {
 			app.SendError(writer, request, http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -185,6 +182,28 @@ func (app *App) HandleFinish(writer http.ResponseWriter, request *http.Request) 
 			app.Logger.Error("Failed to remove chunk dir", "err", err)
 		}
 	}()
+
+	var totalSize int64
+	for i := range total {
+		info, err := os.Stat(filepath.Join(app.Conf.StorageDir, TempDirName, uid, strconv.Itoa(i)))
+		if err != nil {
+			app.Logger.Error("Missing chunk", "index", i, "err", err)
+			app.SendError(writer, request, http.StatusBadRequest)
+			return
+		}
+		chunkContentSize := info.Size() - crypto.KeySize
+		if chunkContentSize < 0 {
+			app.SendError(writer, request, http.StatusBadRequest)
+			return
+		}
+		totalSize += chunkContentSize
+	}
+
+	if totalSize > (app.Conf.MaxMB * MegaByte) {
+		app.Logger.Warn("Upload exceeded quota", "uid", uid, "size", totalSize)
+		app.SendError(writer, request, http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	hasher := sha256.New()
 	for i := range total {
