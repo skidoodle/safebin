@@ -1,6 +1,5 @@
-FROM --platform=$BUILDPLATFORM golang:1.25.6 AS builder
-
-WORKDIR /app
+FROM --platform=$BUILDPLATFORM golang:1.25.6-alpine AS builder
+WORKDIR /src
 
 COPY go.mod go.sum ./
 RUN go mod download
@@ -15,28 +14,29 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -ldflags="-s -w -X github.com/skidoodle/safebin/internal/app.Version=$VERSION" \
     -trimpath \
-    -o /app/safebin .
+    -o /bin/safebin .
 
-FROM debian:trixie-slim
+FROM alpine:latest AS sys-context
+RUN apk add --no-cache ca-certificates mailcap
+RUN echo "appuser:x:10001:10001:appuser:/:/sbin/nologin" > /etc/passwd_app \
+    && echo "appuser:x:10001:appuser" > /etc/group_app
+RUN mkdir -p /app/storage
 
-LABEL org.opencontainers.image.source="https://github.com/skidoodle/safebin"
-LABEL org.opencontainers.image.description="Minimalist, self-hosted file storage with Zero-Knowledge at Rest encryption."
-LABEL org.opencontainers.image.licenses="GPL-2.0-only"
+FROM scratch
+COPY --from=sys-context /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=sys-context /etc/mime.types /etc/mime.types
+COPY --from=sys-context /etc/passwd_app /etc/passwd
+COPY --from=sys-context /etc/group_app /etc/group
+COPY --from=builder /bin/safebin /app/safebin
+COPY --from=sys-context --chown=10001:10001 /app/storage /app/storage
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    media-types \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN useradd -m -u 10001 -s /bin/bash appuser
 WORKDIR /app
-
-COPY --from=builder /app/safebin .
-
-RUN mkdir -p /app/storage && chown 10001:10001 /app/storage
-VOLUME ["/app/storage"]
-
 USER 10001
+VOLUME ["/app/storage"]
 EXPOSE 8080
+
+ENV SAFEBIN_HOST=0.0.0.0 \
+    SAFEBIN_PORT=8080 \
+    SAFEBIN_STORAGE=/app/storage
 
 ENTRYPOINT ["/app/safebin"]
