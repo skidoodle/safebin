@@ -172,7 +172,7 @@ func TestSaveChunk_EncryptsData(t *testing.T) {
 	}
 }
 
-func TestGetChunkDecryptors_RestoresData(t *testing.T) {
+func TestSequentialChunkReader_RestoresData(t *testing.T) {
 	tmpDir := t.TempDir()
 	app := &App{
 		Conf:   Config{StorageDir: tmpDir},
@@ -190,29 +190,24 @@ func TestGetChunkDecryptors_RestoresData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	decryptors, closeFn, err := app.getChunkDecryptors(uid, 2)
-	if err != nil {
-		t.Fatalf("getChunkDecryptors failed: %v", err)
+	reader := &SequentialChunkReader{
+		app:   app,
+		uid:   uid,
+		total: 2,
 	}
-	defer closeFn()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("Failed to close reader: %v", err)
+		}
+	}()
 
-	if len(decryptors) != 2 {
-		t.Fatalf("Expected 2 decryptors, got %d", len(decryptors))
-	}
-
-	buf1, err := io.ReadAll(decryptors[0])
+	restored, err := io.ReadAll(reader)
 	if err != nil {
-		t.Fatalf("Failed to read decryptor 1: %v", err)
-	}
-	if !bytes.Equal(buf1, data1) {
-		t.Errorf("Chunk 1 mismatch. Want %s, got %s", data1, buf1)
+		t.Fatalf("ReadAll failed: %v", err)
 	}
 
-	buf2, err := io.ReadAll(decryptors[1])
-	if err != nil {
-		t.Fatalf("Failed to read decryptor 2: %v", err)
-	}
-	if !bytes.Equal(buf2, data2) {
-		t.Errorf("Chunk 2 mismatch. Want %s, got %s", data2, buf2)
+	expected := append(data1, data2...)
+	if !bytes.Equal(restored, expected) {
+		t.Errorf("Restored data mismatch.\nWant: %s\nGot:  %s", expected, restored)
 	}
 }

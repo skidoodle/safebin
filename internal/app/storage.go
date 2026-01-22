@@ -70,56 +70,93 @@ func (app *App) saveChunk(uid string, idx int, src io.Reader) error {
 	return nil
 }
 
-func (app *App) getChunkDecryptors(uid string, total int) ([]io.ReadSeeker, func(), error) {
-	files := make([]*os.File, 0, total)
-	decryptors := make([]io.ReadSeeker, 0, total)
-
-	closeAll := func() {
-		for _, f := range files {
-			_ = f.Close()
-		}
+func (app *App) openChunkDecryptor(uid string, idx int) (io.ReadCloser, error) {
+	partPath := filepath.Join(app.Conf.StorageDir, TempDirName, uid, strconv.Itoa(idx))
+	f, err := os.Open(partPath)
+	if err != nil {
+		return nil, fmt.Errorf("open chunk %d: %w", idx, err)
 	}
 
-	for i := range total {
-		partPath := filepath.Join(app.Conf.StorageDir, TempDirName, uid, strconv.Itoa(i))
-		f, err := os.Open(partPath)
-		if err != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("open chunk %d: %w", i, err)
-		}
-		files = append(files, f)
-
-		key := make([]byte, crypto.KeySize)
-		if _, err := io.ReadFull(f, key); err != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("read chunk key %d: %w", i, err)
-		}
-
-		info, err := f.Stat()
-		if err != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("stat chunk %d: %w", i, err)
-		}
-
-		bodySize := info.Size() - int64(crypto.KeySize)
-		if bodySize < 0 {
-			closeAll()
-			return nil, nil, fmt.Errorf("invalid chunk size %d", i)
-		}
-
-		bodyReader := io.NewSectionReader(f, int64(crypto.KeySize), bodySize)
-
-		streamer, err := crypto.NewGCMStreamer(key)
-		if err != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("create streamer %d: %w", i, err)
-		}
-
-		decryptor := crypto.NewDecryptor(bodyReader, streamer.AEAD, bodySize)
-		decryptors = append(decryptors, decryptor)
+	key := make([]byte, crypto.KeySize)
+	if _, err := io.ReadFull(f, key); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("read chunk key %d: %w", idx, err)
 	}
 
-	return decryptors, closeAll, nil
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("stat chunk %d: %w", idx, err)
+	}
+
+	bodySize := info.Size() - int64(crypto.KeySize)
+	if bodySize < 0 {
+		_ = f.Close()
+		return nil, fmt.Errorf("invalid chunk size %d", idx)
+	}
+
+	bodyReader := io.NewSectionReader(f, int64(crypto.KeySize), bodySize)
+
+	streamer, err := crypto.NewGCMStreamer(key)
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("create streamer %d: %w", idx, err)
+	}
+
+	decryptor := crypto.NewDecryptor(bodyReader, streamer.AEAD, bodySize)
+
+	return &chunkReadCloser{Decryptor: decryptor, f: f}, nil
+}
+
+type chunkReadCloser struct {
+	*crypto.Decryptor
+	f *os.File
+}
+
+func (c *chunkReadCloser) Close() error {
+	return c.f.Close()
+}
+
+type SequentialChunkReader struct {
+	app        *App
+	uid        string
+	total      int
+	currentIdx int
+	currentRC  io.ReadCloser
+}
+
+func (s *SequentialChunkReader) Read(p []byte) (n int, err error) {
+	if s.currentRC == nil {
+		if s.currentIdx >= s.total {
+			return 0, io.EOF
+		}
+		rc, err := s.app.openChunkDecryptor(s.uid, s.currentIdx)
+		if err != nil {
+			return 0, err
+		}
+		s.currentRC = rc
+	}
+
+	n, err = s.currentRC.Read(p)
+	if err == io.EOF {
+		_ = s.currentRC.Close()
+		s.currentRC = nil
+		s.currentIdx++
+
+		if n > 0 {
+			return n, nil
+		}
+		return s.Read(p)
+	}
+
+	return n, err
+}
+
+func (s *SequentialChunkReader) Close() error {
+	if s.currentRC != nil {
+		return s.currentRC.Close()
+	}
+	return nil
 }
 
 func (app *App) encryptAndSave(src io.Reader, key []byte, finalPath string) error {

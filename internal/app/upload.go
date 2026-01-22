@@ -3,12 +3,14 @@ package app
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/skidoodle/safebin/internal/crypto"
 )
@@ -19,20 +21,36 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 	limit := (app.Conf.MaxMB * MegaByte) + MegaByte
 	request.Body = http.MaxBytesReader(writer, request.Body, limit)
 
-	file, header, err := request.FormFile("file")
+	mr, err := request.MultipartReader()
 	if err != nil {
-		if err.Error() == "http: request body too large" {
-			app.SendError(writer, request, http.StatusRequestEntityTooLarge)
-			return
-		}
 		app.SendError(writer, request, http.StatusBadRequest)
 		return
 	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			app.Logger.Error("Failed to close upload file", "err", closeErr)
+
+	var filename string
+	var partReader io.Reader
+
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
 		}
-	}()
+		if err != nil {
+			app.SendError(writer, request, http.StatusBadRequest)
+			return
+		}
+
+		if part.FormName() == "file" {
+			filename = part.FileName()
+			partReader = part
+			break
+		}
+	}
+
+	if partReader == nil {
+		app.SendError(writer, request, http.StatusBadRequest)
+		return
+	}
 
 	tmp, err := os.CreateTemp(filepath.Join(app.Conf.StorageDir, TempDirName), "up_*")
 	if err != nil {
@@ -58,11 +76,10 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 
 	pr, pw := io.Pipe()
 	hasher := sha256.New()
-
 	errChan := make(chan error, 1)
 
 	go func() {
-		_, err := io.Copy(io.MultiWriter(hasher, pw), file)
+		_, err := io.Copy(io.MultiWriter(hasher, pw), partReader)
 		_ = pw.CloseWithError(err)
 		errChan <- err
 	}()
@@ -87,8 +104,12 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 	}
 
 	if err := <-errChan; err != nil {
-		app.Logger.Error("Failed to read/hash upload", "err", err)
-		app.SendError(writer, request, http.StatusRequestEntityTooLarge)
+		if errors.Is(err, http.ErrMissingBoundary) || strings.Contains(err.Error(), "request body too large") {
+			app.SendError(writer, request, http.StatusRequestEntityTooLarge)
+		} else {
+			app.Logger.Error("Failed to read/hash upload", "err", err)
+			app.SendError(writer, request, http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -103,7 +124,7 @@ func (app *App) HandleUpload(writer http.ResponseWriter, request *http.Request) 
 	info, _ := tmp.Stat()
 	decryptor := crypto.NewDecryptor(tmp, streamer.AEAD, info.Size())
 
-	app.finalizeUpload(writer, request, decryptor, convergentKey, header.Filename)
+	app.finalizeUpload(writer, request, decryptor, convergentKey, filename)
 }
 
 func (app *App) HandleChunk(writer http.ResponseWriter, request *http.Request) {
@@ -159,42 +180,41 @@ func (app *App) HandleFinish(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	decryptors, closeAll, err := app.getChunkDecryptors(uid, total)
-	if err != nil {
-		app.Logger.Error("Failed to open chunks", "err", err)
-		app.SendError(writer, request, http.StatusInternalServerError)
-		return
-	}
 	defer func() {
-		closeAll()
 		if err := os.RemoveAll(filepath.Join(app.Conf.StorageDir, TempDirName, uid)); err != nil {
 			app.Logger.Error("Failed to remove chunk dir", "err", err)
 		}
 	}()
 
-	readers := make([]io.Reader, len(decryptors))
-	for i, d := range decryptors {
-		readers[i] = d
-	}
-
 	hasher := sha256.New()
-	if _, err := io.Copy(hasher, io.MultiReader(readers...)); err != nil {
-		app.Logger.Error("Failed to hash chunks", "err", err)
-		app.SendError(writer, request, http.StatusInternalServerError)
-		return
+	for i := range total {
+		rc, err := app.openChunkDecryptor(uid, i)
+		if err != nil {
+			app.Logger.Error("Failed to open chunk for hashing", "index", i, "err", err)
+			app.SendError(writer, request, http.StatusInternalServerError)
+			return
+		}
+		if _, err := io.Copy(hasher, rc); err != nil {
+			_ = rc.Close()
+			app.Logger.Error("Failed to hash chunk", "index", i, "err", err)
+			app.SendError(writer, request, http.StatusInternalServerError)
+			return
+		}
+		_ = rc.Close()
 	}
 
 	convergentKey := hasher.Sum(nil)[:crypto.KeySize]
 
-	for _, d := range decryptors {
-		if _, err := d.Seek(0, io.SeekStart); err != nil {
-			app.Logger.Error("Failed to reset chunk decryptor", "err", err)
-			app.SendError(writer, request, http.StatusInternalServerError)
-			return
-		}
+	multiSrc := &SequentialChunkReader{
+		app:   app,
+		uid:   uid,
+		total: total,
 	}
-
-	multiSrc := io.MultiReader(readers...)
+	defer func() {
+		if err := multiSrc.Close(); err != nil {
+			app.Logger.Error("Failed to close sequential reader", "uid", uid, "err", err)
+		}
+	}()
 
 	app.finalizeUpload(writer, request, multiSrc, convergentKey, request.FormValue("filename"))
 }
